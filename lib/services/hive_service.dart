@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/hive_data.dart';
 import 'auth_service.dart';
 import 'connectivity_service.dart';
@@ -11,14 +13,16 @@ class HiveService extends ChangeNotifier {
   factory HiveService() => _instance;
 
   HiveService._internal() {
-    _hives = List.from(HiveData.samples);
+    _hives = [];
+    _loadFromCache();
     _listenToAuthChanges();
   }
 
-  late List<HiveData> _hives;
+  List<HiveData> _hives = [];
   StreamSubscription<QuerySnapshot>? _hivesSubscription;
   StreamSubscription? _authSubscription;
   Timer? _debounceTimer;
+  String? _currentUserId;
 
   List<HiveData> get hives => List.unmodifiable(_hives);
 
@@ -29,14 +33,52 @@ class HiveService extends ChangeNotifier {
     });
   }
 
+  Future<void> _saveToCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = _hives.map((h) => h.toJson()).toList();
+      final encoded = jsonEncode(jsonList);
+      final uid = _currentUserId ?? 'global';
+      await prefs.setString('beeware_cached_hives_$uid', encoded);
+      await prefs.setString('beeware_cached_hives_latest', encoded);
+    } catch (e) {
+      debugPrint('Error saving hives to cache: $e');
+    }
+  }
+
+  Future<void> _loadFromCache([String? uid]) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userKey = uid ?? _currentUserId ?? 'latest';
+      String? raw = prefs.getString('beeware_cached_hives_$userKey');
+      raw ??= prefs.getString('beeware_cached_hives_latest');
+
+      if (raw != null && raw.isNotEmpty) {
+        final List<dynamic> decoded = jsonDecode(raw);
+        final cached = decoded
+            .map((item) => HiveData.fromJson(Map<String, dynamic>.from(item as Map)))
+            .toList();
+        if (cached.isNotEmpty) {
+          _hives = cached;
+          notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading cached hives: $e');
+    }
+  }
+
   void _listenToAuthChanges() {
     try {
       _authSubscription = AuthService().authStateChanges().listen((user) {
         if (user != null && !user.isAnonymous) {
+          _currentUserId = user.uid;
+          _loadFromCache(user.uid);
           _initFirestoreStream(user.uid);
         } else {
+          _currentUserId = null;
           _hivesSubscription?.cancel();
-          _hives = List.from(HiveData.samples);
+          _hives = [];
           _debouncedNotify();
         }
       });
@@ -50,22 +92,55 @@ class HiveService extends ChangeNotifier {
     try {
       _hivesSubscription = FirebaseFirestore.instance
           .collection('hives')
-          .where('userId', isEqualTo: userId)
           .snapshots()
           .listen((snapshot) {
-        if (snapshot.docs.isNotEmpty) {
-          _hives = snapshot.docs.map((doc) {
-            final data = doc.data();
-            return HiveData.fromFirestore(doc.id, data);
-          }).toList();
-          ConnectivityService().recordSyncEvent();
-          _debouncedNotify();
-        }
+        final allDocs = snapshot.docs;
+        _hives = allDocs.where((doc) {
+          final data = doc.data();
+          final docUserId = data['userId'] as String?;
+          return docUserId == null || docUserId == userId || docUserId.isEmpty;
+        }).map((doc) {
+          return HiveData.fromFirestore(doc.id, doc.data());
+        }).toList();
+
+        _saveToCache();
+        ConnectivityService().recordSyncEvent();
+        _debouncedNotify();
       }, onError: (e) {
         debugPrint('Firestore hives stream error: $e');
       });
     } catch (e) {
       debugPrint('Firestore stream init skipped: $e');
+    }
+  }
+
+  /// Manually trigger a fresh cloud fetch (e.g. pull to refresh or reconnection)
+  Future<void> refreshFromCloud() async {
+    try {
+      final user = AuthService().currentUser;
+      final userId = user?.uid ?? _currentUserId;
+
+      final snapshot = await FirebaseFirestore.instance
+          .collection('hives')
+          .get()
+          .timeout(const Duration(seconds: 6));
+
+      if (snapshot.docs.isNotEmpty) {
+        final allDocs = snapshot.docs;
+        _hives = allDocs.where((doc) {
+          final data = doc.data();
+          final docUserId = data['userId'] as String?;
+          return docUserId == null || (userId != null && docUserId == userId) || docUserId.isEmpty;
+        }).map((doc) {
+          return HiveData.fromFirestore(doc.id, doc.data());
+        }).toList();
+
+        _saveToCache();
+        ConnectivityService().recordSyncEvent();
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Cloud refresh skipped or offline: $e');
     }
   }
 

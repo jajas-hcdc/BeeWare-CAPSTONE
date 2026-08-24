@@ -105,6 +105,14 @@ class AlertModel {
     };
   }
 
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        ...toMap(),
+      };
+
+  factory AlertModel.fromJson(Map<String, dynamic> json) =>
+      AlertModel.fromMap(json, json['id']);
+
   Color get severityColor {
     switch (severity.toLowerCase()) {
       case 'critical':

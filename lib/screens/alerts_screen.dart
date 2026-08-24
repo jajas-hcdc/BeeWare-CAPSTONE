@@ -13,102 +13,136 @@ class AlertsScreen extends StatefulWidget {
 
 class _AlertsScreenState extends State<AlertsScreen> {
   int _selectedFilter = 0;
+  late final PageController _pageController;
   final List<String> _filterTabs = ['All', 'Critical', 'Warning'];
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController(initialPage: _selectedFilter);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _onTabTapped(int index) {
+    if (_selectedFilter != index) {
+      setState(() => _selectedFilter = index);
+      _pageController.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: AlertService(),
       builder: (context, child) {
-        final alerts = AlertService().alerts;
+        final allAlerts = AlertService().alerts;
+        final criticalAlerts = allAlerts.where((a) => a.severity.toLowerCase() == 'critical').toList();
+        final warningAlerts = allAlerts.where((a) => a.severity.toLowerCase() == 'warning').toList();
 
-        final filteredAlerts = alerts.where((a) {
-          if (_selectedFilter == 0) return true;
-          if (_selectedFilter == 1) return a.severity.toLowerCase() == 'critical';
-          if (_selectedFilter == 2) return a.severity.toLowerCase() == 'warning';
-          return true;
-        }).toList();
-
-            return Scaffold(
-              backgroundColor: AppColors.screenYellow,
-              appBar: PreferredSize(
-                preferredSize: const Size.fromHeight(60),
-                child: Container(
-                  color: Colors.white,
-                  child: const SafeArea(
-                    bottom: false,
-                    child: Center(
-                      child: Text(
-                        'Alerts',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.black,
-                        ),
-                      ),
+        return Scaffold(
+          backgroundColor: AppColors.screenYellow,
+          appBar: PreferredSize(
+            preferredSize: const Size.fromHeight(60),
+            child: Container(
+              color: Colors.white,
+              child: const SafeArea(
+                bottom: false,
+                child: Center(
+                  child: Text(
+                    'Alerts',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.black,
                     ),
                   ),
                 ),
               ),
-              body: Column(
-                children: [
-                  // Filter Tabs
-                  Container(
-                    color: AppColors.screenYellow,
-                    padding: const EdgeInsets.symmetric(vertical: 4.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: List.generate(_filterTabs.length, (index) {
-                        final isSelected = index == _selectedFilter;
-                        return GestureDetector(
-                          onTap: () => setState(() => _selectedFilter = index),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                            decoration: BoxDecoration(
-                              border: isSelected
-                                  ? const Border(
-                                      bottom: BorderSide(color: Colors.black, width: 2.5),
-                                    )
-                                  : null,
-                            ),
-                            child: Text(
-                              _filterTabs[index],
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
-                                color: Colors.black,
-                              ),
-                            ),
+            ),
+          ),
+          body: Column(
+            children: [
+              // Filter Tabs
+              Container(
+                color: AppColors.screenYellow,
+                padding: const EdgeInsets.symmetric(vertical: 4.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: List.generate(_filterTabs.length, (index) {
+                    final isSelected = index == _selectedFilter;
+                    return GestureDetector(
+                      onTap: () => _onTabTapped(index),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                        decoration: BoxDecoration(
+                          border: isSelected
+                              ? const Border(
+                                  bottom: BorderSide(color: Colors.black, width: 2.5),
+                                )
+                              : null,
+                        ),
+                        child: Text(
+                          _filterTabs[index],
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
+                            color: Colors.black,
                           ),
-                        );
-                      }),
-                    ),
-                  ),
-
-                  // Alerts List
-                  Expanded(
-                    child: filteredAlerts.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'No alerts in this category.',
-                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black54),
-                            ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                            itemCount: filteredAlerts.length,
-                            itemBuilder: (context, index) {
-                              final alert = filteredAlerts[index];
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 12.0),
-                                child: _buildAlertCard(context, alert),
-                              );
-                            },
-                          ),
-                  ),
-                ],
+                        ),
+                      ),
+                    );
+                  }),
+                ),
               ),
-            );
+
+              // Alerts PageView with slide/swipe gesture support
+              Expanded(
+                child: PageView(
+                  controller: _pageController,
+                  onPageChanged: (index) {
+                    setState(() => _selectedFilter = index);
+                  },
+                  children: [
+                    _buildAlertsList(context, allAlerts),
+                    _buildAlertsList(context, criticalAlerts),
+                    _buildAlertsList(context, warningAlerts),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAlertsList(BuildContext context, List<AlertModel> list) {
+    if (list.isEmpty) {
+      return const Center(
+        child: Text(
+          'No alerts in this category.',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black54),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      itemCount: list.length,
+      itemBuilder: (context, index) {
+        final alert = list[index];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12.0),
+          child: _buildAlertCard(context, alert),
+        );
       },
     );
   }

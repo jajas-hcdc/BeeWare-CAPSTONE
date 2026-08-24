@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+git add .import 'package:flutter/material.dart';
 import '../models/hive_data.dart';
 import '../services/hive_service.dart';
 import '../theme/app_theme.dart';
@@ -21,6 +21,7 @@ class HiveDetailScreen extends StatefulWidget {
 class _HiveDetailScreenState extends State<HiveDetailScreen> {
   late int _selectedTab;
   late HiveData _hive;
+  late final PageController _pageController;
 
   final List<String> _tabs = ['Overview', 'Sensors', 'AI analysis', 'History'];
 
@@ -28,7 +29,41 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
   void initState() {
     super.initState();
     _selectedTab = widget.initialTab;
-    _hive = widget.hive ?? HiveData.samples.first;
+    _pageController = PageController(initialPage: _selectedTab);
+    _hive = widget.hive ??
+        (HiveService().hives.isNotEmpty
+            ? HiveService().hives.first
+            : HiveData(
+                id: 'hive_live',
+                name: 'Live Hive',
+                conditionLabel: 'Queen Present',
+                confidence: 90,
+                healthScore: 90,
+                temperature: '--',
+                humidity: '--',
+                acoustic: 'Normal Activity',
+                updated: 'Just now',
+                isAlert: false,
+                alertLabel: 'Queen Present',
+                alertMessage: 'Waiting for live telemetry stream...',
+              ));
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _onTabTapped(int index) {
+    if (_selectedTab != index) {
+      setState(() => _selectedTab = index);
+      _pageController.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+    }
   }
 
   String _getHeaderTitle() {
@@ -60,99 +95,100 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
             title: _getHeaderTitle(),
             showBack: true,
           ),
-      body: Column(
+          body: Column(
+            children: [
+              // Sub-tab Navigation Bar
+              Container(
+                color: AppColors.screenYellow,
+                padding: const EdgeInsets.symmetric(vertical: 4.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: List.generate(_tabs.length, (index) {
+                    final isSelected = index == _selectedTab;
+                    return GestureDetector(
+                      onTap: () => _onTabTapped(index),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          border: isSelected
+                              ? const Border(
+                                  bottom: BorderSide(color: Colors.black, width: 2.5),
+                                )
+                              : null,
+                        ),
+                        child: Text(
+                          _tabs[index],
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+
+              // Sub-tab PageView with swipe and slide navigation
+              Expanded(
+                child: PageView(
+                  controller: _pageController,
+                  onPageChanged: (index) {
+                    setState(() => _selectedTab = index);
+                  },
+                  children: [
+                    _buildTabWrapper(_buildOverviewTab()),
+                    _buildTabWrapper(_buildSensorsTab()),
+                    _buildTabWrapper(_buildAiAnalysisTab()),
+                    _buildTabWrapper(_buildHistoryTab()),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTabWrapper(Widget content) {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Sub-tab Navigation Bar
-          Container(
-            color: AppColors.screenYellow,
-            padding: const EdgeInsets.symmetric(vertical: 4.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: List.generate(_tabs.length, (index) {
-                final isSelected = index == _selectedTab;
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedTab = index),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      border: isSelected
-                          ? const Border(
-                              bottom: BorderSide(color: Colors.black, width: 2.5),
-                            )
-                          : null,
-                    ),
+          if (_hive.isSensorOffline)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3E0),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFFB74D)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.wifi_off, size: 18, color: Color(0xFFE65100)),
+                  const SizedBox(width: 8),
+                  Expanded(
                     child: Text(
-                      _tabs[index],
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
-                        color: Colors.black,
+                      '⚠️ Sensor Node Offline (${_hive.lastSeenText})',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFE65100),
                       ),
                     ),
                   ),
-                );
-              }),
-            ),
-          ),
-
-          // Sub-tab Content View
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_hive.isSensorOffline)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF3E0),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xFFFFB74D)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.wifi_off, size: 18, color: Color(0xFFE65100)),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '⚠️ Sensor Node Offline (${_hive.lastSeenText})',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFFE65100),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  _buildCurrentTabContent(),
                 ],
               ),
             ),
-          ),
+          content,
         ],
       ),
     );
-  },
-);
-}
-
-  Widget _buildCurrentTabContent() {
-    switch (_selectedTab) {
-      case 0:
-        return _buildOverviewTab();
-      case 1:
-        return _buildSensorsTab();
-      case 2:
-        return _buildAiAnalysisTab();
-      case 3:
-        return _buildHistoryTab();
-      default:
-        return _buildOverviewTab();
-    }
   }
 
   // ---------------- TAB 1: OVERVIEW ----------------

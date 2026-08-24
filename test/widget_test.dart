@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:beeware_app/screens/home_screen.dart';
-import 'package:beeware_app/screens/hives_screen.dart';
+import 'package:beeware_app/screens/alerts_screen.dart';
 
 void main() {
   testWidgets('HomeScreen smoke test renders brand and sections', (WidgetTester tester) async {
@@ -13,9 +13,15 @@ void main() {
     expect(find.text('AI Colony Health Assessment'), findsOneWidget);
   });
 
-  testWidgets('HivesScreen smoke test renders hives list', (WidgetTester tester) async {
-    await tester.pumpWidget(const MaterialApp(home: HivesScreen()));
+  testWidgets('HomeScreen contains pull-to-refresh RefreshIndicator', (WidgetTester tester) async {
+    await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
 
-    expect(find.text('My Hives'), findsOneWidget);
+    expect(find.byType(RefreshIndicator), findsOneWidget);
+  });
+
+  testWidgets('AlertsScreen contains slideable PageView', (WidgetTester tester) async {
+    await tester.pumpWidget(const MaterialApp(home: AlertsScreen()));
+
+    expect(find.byType(PageView), findsOneWidget);
   });
 }

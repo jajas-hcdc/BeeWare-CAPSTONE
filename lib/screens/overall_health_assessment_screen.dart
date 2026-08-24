@@ -14,9 +14,7 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
     return AnimatedBuilder(
       animation: HiveService(),
       builder: (context, child) {
-        final hives = HiveService().hives.isNotEmpty
-            ? HiveService().hives
-            : HiveData.samples;
+        final hives = HiveService().hives;
 
         final totalHives = hives.length;
         final presentCount = hives.where((h) => h.conditionLabel.contains('Present')).length;
@@ -25,8 +23,12 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
         final rejectedCount = hives.where((h) => h.conditionLabel.contains('Rejected')).length;
         final healthyCount = presentCount + acceptedCount;
 
-        final avgHealthScore = (hives.fold<int>(0, (sum, h) => sum + h.healthScore) / (totalHives > 0 ? totalHives : 1)).round();
-        final avgConfidence = (hives.fold<int>(0, (sum, h) => sum + h.confidence) / (totalHives > 0 ? totalHives : 1)).round();
+        final avgHealthScore = totalHives > 0
+            ? (hives.fold<int>(0, (sum, h) => sum + h.healthScore) / totalHives).round()
+            : 0;
+        final avgConfidence = totalHives > 0
+            ? (hives.fold<int>(0, (sum, h) => sum + h.confidence) / totalHives).round()
+            : 0;
 
         // Calculate average temp and humidity
         double totalTemp = 0;
@@ -45,13 +47,15 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
             validHumCount++;
           }
         }
-        final avgTempStr = validTempCount > 0 ? (totalTemp / validTempCount).toStringAsFixed(1) : '34.2';
-        final avgHumStr = validHumCount > 0 ? (totalHum / validHumCount).toStringAsFixed(0) : '64';
+        final avgTempStr = validTempCount > 0 ? (totalTemp / validTempCount).toStringAsFixed(1) : '--';
+        final avgHumStr = validHumCount > 0 ? (totalHum / validHumCount).toStringAsFixed(0) : '--';
 
-        final isOverallHealthy = avgHealthScore >= 80 && absentCount == 0 && rejectedCount == 0;
-        final healthColor = avgHealthScore >= 80
-            ? AppColors.healthyGreen
-            : (avgHealthScore >= 60 ? const Color(0xFFFF9800) : Colors.red);
+        final isOverallHealthy = totalHives > 0 && avgHealthScore >= 80 && absentCount == 0 && rejectedCount == 0;
+        final healthColor = totalHives == 0
+            ? Colors.black38
+            : (avgHealthScore >= 80
+                ? AppColors.healthyGreen
+                : (avgHealthScore >= 60 ? const Color(0xFFFF9800) : Colors.red));
 
         return Scaffold(
           backgroundColor: AppColors.screenYellow,
@@ -193,8 +197,20 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
-                ...hives.map((h) => _hiveCard(context, h)),
+                if (hives.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                    decoration: AppStyles.cardDecoration(borderRadius: BorderRadius.circular(14)),
+                    child: const Center(
+                      child: Text(
+                        'No hives added yet.\nConnected hives will display health metrics here.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, color: Colors.black54, fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  )
+                else
+                  ...hives.map((h) => _hiveCard(context, h)),
                 const SizedBox(height: 16),
 
                 // AI Apiary-Wide Recommendations
@@ -220,9 +236,11 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        absentCount > 0 || rejectedCount > 0
-                            ? '⚠️ Attention Needed: $absentCount hive(s) detected with Queen Absent and $rejectedCount hive(s) with Queen Rejected. Prioritize physical inspections of affected boxes immediately to check for emergency queen cups or introduce new mated queens.'
-                            : '✅ All $totalHives monitored colonies are exhibiting normal acoustic buzzing and brood thermoregulation. Continue standard routine apiary checks and maintain clean water sources nearby.',
+                        totalHives == 0
+                            ? 'ℹ️ No hives connected yet. Once you pair an IoT device or add a hive, real-time AI colony diagnostics and insights will appear here.'
+                            : (absentCount > 0 || rejectedCount > 0
+                                ? '⚠️ Attention Needed: $absentCount hive(s) detected with Queen Absent and $rejectedCount hive(s) with Queen Rejected. Prioritize physical inspections of affected boxes immediately to check for emergency queen cups or introduce new mated queens.'
+                                : '✅ All $totalHives monitored colonies are exhibiting normal acoustic buzzing and brood thermoregulation. Continue standard routine apiary checks and maintain clean water sources nearby.'),
                         style: const TextStyle(fontSize: 12, color: Colors.black87, height: 1.4),
                       ),
                     ],

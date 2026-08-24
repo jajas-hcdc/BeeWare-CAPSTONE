@@ -12,8 +12,8 @@ void main() {
       hiveService = HiveService();
     });
 
-    test('HiveService initializes with samples', () {
-      expect(hiveService.hives.isNotEmpty, true);
+    test('HiveService initializes in clean state', () {
+      expect(hiveService.hives, isA<List<HiveData>>());
     });
 
     test('HiveService adds a new hive and notifies listeners', () {
@@ -47,9 +47,27 @@ void main() {
     });
 
     test('HiveService updates an existing hive', () {
-      final target = hiveService.hives.first;
-      final updated = target.copyWith(name: 'Updated Name ABC', confidence: 100);
+      final target = hiveService.getHiveById('test_hive_123') ??
+          HiveData(
+            id: 'test_hive_update',
+            name: 'Old Name',
+            conditionLabel: 'Queen Present',
+            confidence: 90,
+            healthScore: 90,
+            temperature: '34.0',
+            humidity: '60',
+            acoustic: 'Normal',
+            updated: 'Now',
+            isAlert: false,
+            alertLabel: 'Normal',
+            alertMessage: 'Stable',
+          );
 
+      if (hiveService.getHiveById(target.id) == null) {
+        hiveService.addHive(target);
+      }
+
+      final updated = target.copyWith(name: 'Updated Name ABC', confidence: 100);
       hiveService.updateHive(updated);
 
       final found = hiveService.getHiveById(target.id);
@@ -58,13 +76,26 @@ void main() {
     });
 
     test('HiveService deletes a hive', () {
-      final initialCount = hiveService.hives.length;
-      final targetId = hiveService.hives.first.id;
+      final target = HiveData(
+        id: 'test_hive_del',
+        name: 'To Delete',
+        conditionLabel: 'Queen Present',
+        confidence: 90,
+        healthScore: 90,
+        temperature: '34.0',
+        humidity: '60',
+        acoustic: 'Normal',
+        updated: 'Now',
+        isAlert: false,
+        alertLabel: 'Normal',
+        alertMessage: 'Stable',
+      );
 
-      hiveService.deleteHive(targetId);
+      hiveService.addHive(target);
+      expect(hiveService.getHiveById('test_hive_del'), isNotNull);
 
-      expect(hiveService.hives.length, initialCount - 1);
-      expect(hiveService.getHiveById(targetId), isNull);
+      hiveService.deleteHive('test_hive_del');
+      expect(hiveService.getHiveById('test_hive_del'), isNull);
     });
   });
 }

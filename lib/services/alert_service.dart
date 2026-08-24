@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/alert_model.dart';
 import 'firebase_service.dart';
 import 'hive_service.dart';
@@ -9,6 +11,7 @@ class AlertService extends ChangeNotifier {
   factory AlertService() => _instance;
 
   AlertService._internal() {
+    _loadFromCache();
     _init();
   }
 
@@ -21,6 +24,36 @@ class AlertService extends ChangeNotifier {
   List<AlertModel> get recentAlerts {
     if (_alerts.isEmpty) return [];
     return _alerts.take(4).toList();
+  }
+
+  Future<void> _saveToCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = _alerts.map((a) => a.toJson()).toList();
+      final encoded = jsonEncode(jsonList);
+      await prefs.setString('beeware_cached_alerts', encoded);
+    } catch (e) {
+      debugPrint('Error saving alerts cache: $e');
+    }
+  }
+
+  Future<void> _loadFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('beeware_cached_alerts');
+      if (raw != null && raw.isNotEmpty) {
+        final List<dynamic> decoded = jsonDecode(raw);
+        final cached = decoded
+            .map((item) => AlertModel.fromJson(Map<String, dynamic>.from(item as Map)))
+            .toList();
+        if (cached.isNotEmpty) {
+          _alerts = cached;
+          notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading cached alerts: $e');
+    }
   }
 
   void _init() {
@@ -38,6 +71,16 @@ class AlertService extends ChangeNotifier {
       });
     } catch (e) {
       debugPrint('AlertService Firestore stream skipped: $e');
+    }
+  }
+
+  /// Manually pull latest alerts from cloud
+  Future<void> refreshFromCloud() async {
+    try {
+      // Re-trigger computation with live hives
+      _computeAlerts();
+    } catch (e) {
+      debugPrint('Error refreshing alerts: $e');
     }
   }
 
@@ -92,49 +135,11 @@ class AlertService extends ChangeNotifier {
       }
     }
 
-    // 3. Fallback sample alerts if empty to ensure Recent Alerts and Alerts tab match
-    if (result.isEmpty) {
-      result.addAll([
-        AlertModel(
-          id: 'sample_alert_3',
-          hiveId: 'Hive 3',
-          queenStatus: 'Queen Absent',
-          title: 'Possible Swarming',
-          message: 'Acoustic activity and temperature drop indicate possible swarming preparations.',
-          severity: 'Warning',
-          timestamp: DateTime.now().subtract(const Duration(minutes: 2)),
-          recommendation: 'Inspect hive entrance and add extra supers to alleviate congestion.',
-          detectedBy: 'AI Acoustic Classifier',
-        ),
-        AlertModel(
-          id: 'sample_alert_2',
-          hiveId: 'Hive 2',
-          queenStatus: 'Queen Accepted',
-          title: 'High Temperature',
-          message: 'Core brood box temperature exceeded 36.5°C during afternoon sun.',
-          severity: 'Warning',
-          timestamp: DateTime.now().subtract(const Duration(minutes: 12)),
-          recommendation: 'Provide top shade and ensure apiary ventilation openings are clear.',
-          detectedBy: 'DHT22 Thermal Sensor',
-        ),
-        AlertModel(
-          id: 'sample_alert_4',
-          hiveId: 'Hive 4',
-          queenStatus: 'Queen Rejected',
-          title: 'Possible Queenless Condition',
-          message: 'Distress acoustic spikes and absence of queen pheromone piping confirmed.',
-          severity: 'Critical',
-          timestamp: DateTime.now().subtract(const Duration(minutes: 30)),
-          recommendation: 'Inspect frames for queen cells and prepare a replacement mated queen.',
-          detectedBy: 'AI Multi-Sensor Model',
-        ),
-      ]);
-    }
-
     // Sort by timestamp newest first
     result.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
     _alerts = result;
+    _saveToCache();
     notifyListeners();
   }
 

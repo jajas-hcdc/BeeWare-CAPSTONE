@@ -5,13 +5,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('AlertService Synchronization Tests', () {
-    test('AlertService initializes and provides synchronized alerts', () {
+    test('AlertService provides synchronized alerts list and recentAlerts getter', () {
       final service = AlertService();
       final allAlerts = service.alerts;
       final recentAlerts = service.recentAlerts;
 
-      expect(allAlerts, isNotEmpty);
-      expect(recentAlerts, isNotEmpty);
+      expect(allAlerts, isA<List>());
+      expect(recentAlerts, isA<List>());
 
       // Verify that every alert in Recent Alerts is present in All Alerts (Alerts tab)
       for (final r in recentAlerts) {

@@ -9,6 +9,7 @@ import 'screens/settings_screen.dart';
 import 'screens/hive_detail_screen.dart';
 import 'services/firebase_service.dart';
 import 'services/hive_service.dart';
+import 'services/alert_service.dart';
 import 'services/user_profile_service.dart';
 import 'services/auth_service.dart';
 import 'services/connectivity_service.dart';
@@ -72,35 +73,35 @@ class AuthGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: ConnectivityService(),
-      builder: (context, _) {
-        if (!ConnectivityService().isOnline) {
-          return const OfflineScreen();
+    return StreamBuilder(
+      stream: AuthService().authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: AppColors.screenYellow,
+            body: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
+              ),
+            ),
+          );
         }
 
-        return StreamBuilder(
-          stream: AuthService().authStateChanges(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Scaffold(
-                backgroundColor: AppColors.screenYellow,
-                body: Center(
-                  child: CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
-                  ),
-                ),
-              );
-            }
-
-            final user = snapshot.data;
-            if (user == null || user.isAnonymous) {
+        final user = snapshot.data;
+        if (user == null || user.isAnonymous) {
+          return AnimatedBuilder(
+            animation: ConnectivityService(),
+            builder: (context, _) {
+              if (!ConnectivityService().isOnline) {
+                return const OfflineScreen();
+              }
               return const LoginScreen();
-            }
+            },
+          );
+        }
 
-            return const MainNavigation();
-          },
-        );
+        // Logged in user: display MainNavigation with cached data and dynamic offline banners
+        return const MainNavigation();
       },
     );
   }
@@ -115,12 +116,14 @@ class MainNavigation extends StatefulWidget {
 
 class _MainNavigationState extends State<MainNavigation> {
   int _selectedIndex = 0;
+  late final PageController _pageController;
   StreamSubscription? _msgSub;
   StreamSubscription? _msgOpenedSub;
 
   @override
   void initState() {
     super.initState();
+    _pageController = PageController(initialPage: _selectedIndex);
     // 1. Foreground in-app notification banner
     _msgSub = FirebaseService().onMessageStream.listen((message) {
       if (!mounted) return;
@@ -191,6 +194,7 @@ class _MainNavigationState extends State<MainNavigation> {
 
   @override
   void dispose() {
+    _pageController.dispose();
     _msgSub?.cancel();
     _msgOpenedSub?.cancel();
     super.dispose();
@@ -198,41 +202,59 @@ class _MainNavigationState extends State<MainNavigation> {
 
   void _navigateToHive(String? hiveId) {
     final hives = HiveService().hives;
-    HiveData? target;
+    if (hives.isEmpty) {
+      _onTap(1);
+      return;
+    }
+
+    HiveData target = hives.first;
     if (hiveId != null && hiveId.isNotEmpty) {
-      target = hives.firstWhere(
-        (h) => h.id == hiveId || h.deviceId == hiveId || h.name.toLowerCase() == hiveId.toLowerCase(),
-        orElse: () => hives.isNotEmpty ? hives.first : HiveData.samples.first,
-      );
-    } else {
-      target = hives.isNotEmpty ? hives.first : HiveData.samples.first;
+      try {
+        target = hives.firstWhere(
+          (h) => h.id == hiveId || h.deviceId == hiveId || h.name.toLowerCase() == hiveId.toLowerCase(),
+        );
+      } catch (_) {
+        target = hives.first;
+      }
     }
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => HiveDetailScreen(hive: target!, initialTab: 2),
+        builder: (context) => HiveDetailScreen(hive: target, initialTab: 2),
       ),
     );
   }
 
   void _onTap(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
+    if (_selectedIndex != index) {
+      setState(() {
+        _selectedIndex = index;
+      });
+      _pageController.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final screens = <Widget>[
-      HomeScreen(onOpenAlerts: () => setState(() => _selectedIndex = 2)),
+      HomeScreen(onOpenAlerts: () => _onTap(2)),
       const HivesScreen(),
       const AlertsScreen(),
       const SettingsScreen(),
     ];
 
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
+      body: PageView(
+        controller: _pageController,
+        onPageChanged: (index) {
+          setState(() {
+            _selectedIndex = index;
+          });
+        },
         children: screens,
       ),
       bottomNavigationBar: Container(
@@ -265,7 +287,7 @@ class _MainNavigationState extends State<MainNavigation> {
                   label: 'Alerts',
                   icon: Icons.notifications_none,
                   selectedIcon: Icons.notifications,
-                  badgeStream: FirebaseService().alertCountStream(),
+                  hasAlertBadge: true,
                 ),
                 _buildNavItem(
                   index: 3,
@@ -286,7 +308,7 @@ class _MainNavigationState extends State<MainNavigation> {
     required String label,
     required IconData icon,
     required IconData selectedIcon,
-    Stream<int>? badgeStream,
+    bool hasAlertBadge = false,
   }) {
     final isSelected = _selectedIndex == index;
     final color = isSelected ? const Color(0xFFF5A623) : Colors.black87;
@@ -305,24 +327,25 @@ class _MainNavigationState extends State<MainNavigation> {
                   color: color,
                   size: 24,
                 ),
-                if (badgeStream != null)
-                  StreamBuilder<int>(
-                    stream: badgeStream,
-                    builder: (context, snapshot) {
-                      final count = snapshot.data ?? 0;
+                if (hasAlertBadge)
+                  AnimatedBuilder(
+                    animation: AlertService(),
+                    builder: (context, child) {
+                      final count = AlertService().alerts.length;
                       if (count <= 0) return const SizedBox.shrink();
                       return Positioned(
                         right: -6,
                         top: -4,
                         child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: const BoxDecoration(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
                             color: Colors.red,
-                            shape: BoxShape.circle,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.white, width: 1.2),
                           ),
-                          constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
+                          constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
                           child: Text(
-                            '$count',
+                            count > 99 ? '99+' : '$count',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 9,

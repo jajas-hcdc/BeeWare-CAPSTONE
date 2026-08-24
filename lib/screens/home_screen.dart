@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import '../models/hive_data.dart';
 import '../services/hive_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/alert_service.dart';
+import '../services/connectivity_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/circular_gauge.dart';
 import 'alert_details_screen.dart';
@@ -20,8 +20,7 @@ class HomeScreen extends StatelessWidget {
     return AnimatedBuilder(
       animation: HiveService(),
       builder: (context, child) {
-        final hives = HiveService().hives;
-        final allHives = hives.isNotEmpty ? hives : HiveData.samples;
+        final allHives = HiveService().hives;
         final totalHives = allHives.length;
 
         // Count statistics for condition summary
@@ -30,13 +29,19 @@ class HomeScreen extends StatelessWidget {
         int queenAcceptedCount = allHives.where((h) => h.conditionLabel.toLowerCase().contains('accepted')).length;
         int queenRejectedCount = allHives.where((h) => h.conditionLabel.toLowerCase().contains('rejected')).length;
 
-        final avgHealthScore = (allHives.fold<int>(0, (sum, h) => sum + h.healthScore) / (totalHives > 0 ? totalHives : 1)).round();
-        final avgConfidence = (allHives.fold<int>(0, (sum, h) => sum + h.confidence) / (totalHives > 0 ? totalHives : 1)).round();
+        final avgHealthScore = totalHives > 0
+            ? (allHives.fold<int>(0, (sum, h) => sum + h.healthScore) / totalHives).round()
+            : 0;
+        final avgConfidence = totalHives > 0
+            ? (allHives.fold<int>(0, (sum, h) => sum + h.confidence) / totalHives).round()
+            : 0;
         final healthyHivesCount = queenPresentCount + queenAcceptedCount;
-        final isOverallHealthy = avgHealthScore >= 80 && queenAbsentCount == 0 && queenRejectedCount == 0;
-        final healthColor = avgHealthScore >= 80
-            ? AppColors.healthyGreen
-            : (avgHealthScore >= 60 ? const Color(0xFFFF9800) : Colors.red);
+        final isOverallHealthy = totalHives > 0 && avgHealthScore >= 80 && queenAbsentCount == 0 && queenRejectedCount == 0;
+        final healthColor = totalHives == 0
+            ? Colors.black38
+            : (avgHealthScore >= 80
+                ? AppColors.healthyGreen
+                : (avgHealthScore >= 60 ? const Color(0xFFFF9800) : Colors.red));
 
         // Calculate aggregate apiary environmental metrics
         double totalTemp = 0;
@@ -55,13 +60,13 @@ class HomeScreen extends StatelessWidget {
             totalHum += hum;
             validHumCount++;
           }
-          if (h.acousticStatus.toLowerCase().contains('elevated') || h.acousticStatus.toLowerCase().contains('swarming')) {
+          if (h.acousticStatus.toLowerCase().contains('elevated') || h.acousticStatus.toLowerCase().contains('swarming') || h.acousticStatus.toLowerCase().contains('abnormal')) {
             hasAcousticAnomaly = true;
           }
         }
-        final avgTempStr = validTempCount > 0 ? (totalTemp / validTempCount).toStringAsFixed(1) : '34.2';
-        final avgHumStr = validHumCount > 0 ? (totalHum / validHumCount).toStringAsFixed(0) : '64';
-        final apiaryAcoustic = hasAcousticAnomaly ? 'Elevated\nActivity' : 'Normal\nActivity';
+        final avgTempStr = validTempCount > 0 ? (totalTemp / validTempCount).toStringAsFixed(1) : '--';
+        final avgHumStr = validHumCount > 0 ? (totalHum / validHumCount).toStringAsFixed(0) : '--';
+        final apiaryAcoustic = totalHives == 0 ? 'No Data' : (hasAcousticAnomaly ? 'Elevated\nActivity' : 'Normal\nActivity');
 
         return Scaffold(
           backgroundColor: AppColors.screenYellow,
@@ -99,23 +104,40 @@ class HomeScreen extends StatelessWidget {
                   ),
                   GestureDetector(
                     onTap: onOpenAlerts,
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        const Icon(Icons.notifications_none, size: 28, color: Colors.black),
-                        Positioned(
-                          right: 0,
-                          top: 0,
-                          child: Container(
-                            width: 10,
-                            height: 10,
-                            decoration: const BoxDecoration(
-                              color: Colors.red,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ),
-                      ],
+                    child: AnimatedBuilder(
+                      animation: AlertService(),
+                      builder: (context, child) {
+                        final count = AlertService().alerts.length;
+                        return Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            const Icon(Icons.notifications_none, size: 28, color: Colors.black),
+                            if (count > 0)
+                              Positioned(
+                                right: -4,
+                                top: -4,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white, width: 1.2),
+                                  ),
+                                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                                  child: Text(
+                                    count > 99 ? '99+' : '$count',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                 ],
@@ -124,68 +146,147 @@ class HomeScreen extends StatelessWidget {
           ),
         ),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Greeting & User Profile Image Row
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Dynamic Greeting row with Nickname
-                      AnimatedBuilder(
-                        animation: UserProfileService(),
-                        builder: (context, child) {
-                          final nick = UserProfileService().nickname.trim();
-                          final name = nick.isNotEmpty ? nick : 'Beekeeper';
-                          final hour = DateTime.now().hour;
-                          String timeGreeting = 'Good Morning';
-                          if (hour >= 12 && hour < 18) {
-                            timeGreeting = 'Good Afternoon';
-                          } else if (hour >= 18) {
-                            timeGreeting = 'Good Evening';
-                          }
-                          return Text(
-                            '$timeGreeting, $name!',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.black,
+      body: RefreshIndicator(
+        color: Colors.black,
+        backgroundColor: const Color(0xFFFFCC00),
+        onRefresh: () async {
+          await ConnectivityService().checkConnection();
+          if (ConnectivityService().isOnline) {
+            await HiveService().refreshFromCloud();
+            await AlertService().refreshFromCloud();
+          }
+        },
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Dynamic Offline Banner if network is down
+              AnimatedBuilder(
+                animation: ConnectivityService(),
+                builder: (context, _) {
+                  final isOnline = ConnectivityService().isOnline;
+                  if (isOnline) return const SizedBox.shrink();
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12.0),
+                    padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF3E0),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFFF9800), width: 1.4),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.wifi_off_rounded, color: Color(0xFFE65100), size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Offline Mode',
+                                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: Color(0xFFE65100)),
+                              ),
+                              Text(
+                                'Showing cached data (${ConnectivityService().lastSyncedFormatted})',
+                                style: const TextStyle(fontSize: 11, color: Colors.black87, fontWeight: FontWeight.w500),
+                              ),
+                            ],
+                          ),
+                        ),
+                        InkWell(
+                          onTap: () async {
+                            await ConnectivityService().checkConnection();
+                            if (ConnectivityService().isOnline) {
+                              await HiveService().refreshFromCloud();
+                              await AlertService().refreshFromCloud();
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFF9800),
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 3),
-                      Row(
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: const BoxDecoration(
-                              color: AppColors.healthyGreen,
-                              shape: BoxShape.circle,
+                            child: const Text(
+                              'Retry',
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          const Text(
-                            'Last updated: Just now',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.black87,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+
+              // Greeting & User Profile Image Row
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Dynamic Greeting row with Nickname
+                        AnimatedBuilder(
+                          animation: UserProfileService(),
+                          builder: (context, child) {
+                            final nick = UserProfileService().nickname.trim();
+                            final name = nick.isNotEmpty ? nick : 'Beekeeper';
+                            final hour = DateTime.now().hour;
+                            String timeGreeting = 'Good Morning';
+                            if (hour >= 12 && hour < 18) {
+                              timeGreeting = 'Good Afternoon';
+                            } else if (hour >= 18) {
+                              timeGreeting = 'Good Evening';
+                            }
+                            return Text(
+                              '$timeGreeting, $name!',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.black,
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 3),
+                        AnimatedBuilder(
+                          animation: ConnectivityService(),
+                          builder: (context, _) {
+                            final isOnline = ConnectivityService().isOnline;
+                            final syncText = isOnline
+                                ? 'Last updated: ${ConnectivityService().lastSyncedFormatted}'
+                                : 'Offline (${ConnectivityService().lastSyncedFormatted})';
+                            return Row(
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: isOnline ? AppColors.healthyGreen : const Color(0xFFFF9800),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  syncText,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   ),
-                ),
                 const SizedBox(width: 12),
 
                 // User Profile Image in the encircled top-right area
@@ -283,16 +384,20 @@ class HomeScreen extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                isOverallHealthy ? 'Healthy!' : 'Attention Needed!',
+                                totalHives == 0
+                                    ? 'No Hives Connected'
+                                    : (isOverallHealthy ? 'Healthy!' : 'Attention Needed!'),
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w900,
-                                  color: healthColor,
+                                  color: totalHives == 0 ? Colors.black87 : healthColor,
                                 ),
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '$healthyHivesCount of $totalHives Hives Healthy',
+                                totalHives == 0
+                                    ? 'Pair an IoT Node to begin'
+                                    : '$healthyHivesCount of $totalHives Hives Healthy',
                                 style: const TextStyle(
                                   fontSize: 13,
                                   color: Colors.black87,
@@ -301,7 +406,9 @@ class HomeScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                'AI Confidence: $avgConfidence%',
+                                totalHives == 0
+                                    ? 'AI Multi-Sensor Ready'
+                                    : 'AI Confidence: $avgConfidence%',
                                 style: const TextStyle(
                                   fontSize: 12,
                                   color: Colors.black54,
@@ -488,8 +595,9 @@ class HomeScreen extends StatelessWidget {
           ],
         ),
       ),
-    );
-  },
+    ),
+  );
+},
 );
 }
 

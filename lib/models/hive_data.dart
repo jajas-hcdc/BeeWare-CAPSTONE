@@ -301,6 +301,15 @@ class HiveData {
     };
   }
 
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        ...toMap(),
+      };
+
+  factory HiveData.fromJson(Map<String, dynamic> json) {
+    return HiveData.fromFirestore(json['id'] ?? '', json);
+  }
+
   static List<HiveData> samples = [
     HiveData(
       id: 'hive_1',
