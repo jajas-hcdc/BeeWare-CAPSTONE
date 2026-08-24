@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isResourceOwner() {
+      return isAuthenticated() && 
+        (resource.data.userId == request.auth.uid || request.resource.data.userId == request.auth.uid);
+    }
+
+    // User profiles: users can only read and write their own profile
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // Hives collection: users can only access and manage their own hives
+    match /hives/{hiveId} {
+      allow read, update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Nested user hives (alternative subcollection pattern)
+    match /users/{userId}/hives/{hiveId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // AI Prediction Records: users can only access their own prediction history
+    match /predictions/{predictionId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Alert notifications: authenticated users can read alerts; writes restricted to service account / backend
+    match /alerts/{alertId} {
+      allow read: if isAuthenticated();
+      // Client cannot forge alerts directly unless authenticated for their own hive
+      allow create: if isAuthenticated() && 
+        (request.resource.data.userId == request.auth.uid || request.auth.token.firebase.sign_in_provider == 'custom');
+      allow update, delete: if false; // Immutable alert history
+    }
+  }
+}

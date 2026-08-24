@@ -1,0 +1,44 @@
+name: beeware_app
+
+description: A Flutter app for bee hive monitoring and navigation.
+
+publish_to: none
+
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.2
+  tflite_flutter: ^0.12.1
+  record: ^7.1.1
+  flutter_sound: ^9.30.0
+  permission_handler: ^12.0.1
+  firebase_core: ^4.12.1
+  cloud_firestore: ^6.7.1
+  firebase_auth: ^6.5.6
+  firebase_messaging: 16.4.3
+  geolocator: ^14.0.3
+  path_provider: ^2.1.1
+  provider: ^6.0.0
+  http: ^1.6.0
+  fl_chart: ^0.70.2
+  share_plus: ^13.3.0
+  image_picker: ^1.1.2
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/beeware_model.tflite
+    - assets/labels.txt
+    - assets/images/
+

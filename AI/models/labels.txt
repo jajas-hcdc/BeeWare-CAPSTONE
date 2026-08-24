@@ -1,0 +1,4 @@
+Queen Present
+Queen Absent
+Queen Accepted
+Queen Rejected

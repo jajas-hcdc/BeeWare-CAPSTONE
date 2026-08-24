@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "242774020378",
+    "project_id": "beeware-beaef",
+    "storage_bucket": "beeware-beaef.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:242774020378:android:376c3ceea19b1279099ca3",
+        "android_client_info": {
+          "package_name": "com.example.beeware_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCaBsw-AfLOBBQgXhJkE0L_bDehow6TyFg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
