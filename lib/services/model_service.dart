@@ -12,10 +12,16 @@ class ModelService {
   ModelService._internal();
 
   late Interpreter _interpreter;
-  final List<String> _labels = [
+  
+  final List<String> _presenceLabels = [
     'Queen Present',
+    'Queen Absent'
+  ];
+
+  final List<String> _statusLabels = [
     'Queen Absent',
     'Queen Accepted',
+    'Queen Present',
     'Queen Rejected'
   ];
 
@@ -24,20 +30,25 @@ class ModelService {
   /// Initialize TFLite model
   Future<void> initialize() async {
     try {
-      _interpreter = await Interpreter.fromAsset('beeware_model.tflite');
+      _interpreter = await Interpreter.fromAsset('assets/beeware_model.tflite');
       _isInitialized = true;
-      print('✅ Model loaded successfully');
+      print('✅ Model loaded successfully from assets/beeware_model.tflite');
     } catch (e) {
-      print('❌ Error loading model: $e');
-      rethrow;
+      try {
+        _interpreter = await Interpreter.fromAsset('beeware_model.tflite');
+        _isInitialized = true;
+        print('✅ Model loaded successfully from beeware_model.tflite');
+      } catch (e2) {
+        print('❌ Error loading model: $e2');
+        rethrow;
+      }
     }
   }
 
   bool get isInitialized => _isInitialized;
 
   /// Extract MFCC features from audio file
-  /// Mimics Python pipeline: 40 MFCC + delta + delta-delta = 120 dimensions
-  /// Padded/truncated to 130 time steps
+  /// Mimics Python pipeline: updated to 128x128 dimensions for the new model
   Future<List<List<List<double>>>> extractMFCC(String audioPath) async {
     try {
       // This is still a placeholder until native MFCC extraction is implemented.
@@ -48,12 +59,12 @@ class ModelService {
     }
   }
 
-  /// Generate placeholder MFCC (120x130) - replace with actual extraction
+  /// Generate placeholder MFCC (128x128) - replace with actual extraction
   List<List<List<double>>> _generatePlaceholderMFCC() {
     List<List<List<double>>> mfcc = [];
-    for (int i = 0; i < 120; i++) {
+    for (int i = 0; i < 128; i++) {
       List<List<double>> timeSteps = [];
-      for (int j = 0; j < 130; j++) {
+      for (int j = 0; j < 128; j++) {
         timeSteps.add([Random().nextDouble()]);
       }
       mfcc.add(timeSteps);
@@ -61,7 +72,7 @@ class ModelService {
     return mfcc;
   }
 
-  /// Run inference on MFCC features
+  /// Run inference on MFCC features using the dual output heads
   Future<Map<String, dynamic>> predict(
       List<List<List<double>>> mfccFeatures) async {
     try {
@@ -69,36 +80,74 @@ class ModelService {
         throw Exception('Model not initialized');
       }
 
+      // Input shape expected by the model: [1, 128, 128, 1]
       final input = List.generate(
         1,
         (_) => List.generate(
-          120,
+          128,
           (i) => List.generate(
-            130,
+            128,
             (j) => [mfccFeatures[i][j][0]],
           ),
         ),
       );
 
-      final output = List.generate(1, (_) => List.filled(4, 0.0));
-      _interpreter.run(input, output);
+      // Detect output tensor indices dynamically based on shapes
+      int presenceIndex = 0;
+      int statusIndex = 1;
+      final outputTensors = _interpreter.getOutputTensors();
+      for (int i = 0; i < outputTensors.length; i++) {
+        final shape = outputTensors[i].shape;
+        if (shape.contains(2)) {
+          presenceIndex = i;
+        } else if (shape.contains(4)) {
+          statusIndex = i;
+        }
+      }
 
-      final scores = List<double>.from(output[0]);
-      final softmaxOutput = _softmax(scores);
-      final predictedClass = softmaxOutput.indexWhere(
-        (score) => score == softmaxOutput.reduce(max),
+      // Prepare outputs matching target shape
+      final outputPresence = List.generate(1, (_) => List.filled(2, 0.0));
+      final outputStatus = List.generate(1, (_) => List.filled(4, 0.0));
+
+      final outputs = {
+        presenceIndex: outputPresence,
+        statusIndex: outputStatus,
+      };
+
+      // Run multiple outputs inference
+      _interpreter.runForMultipleInputs([input], outputs);
+
+      // Parse presence output (2 classes)
+      final presenceScores = List<double>.from(outputPresence[0]);
+      final presenceSoftmax = _softmax(presenceScores);
+      final predictedPresenceClass = presenceSoftmax.indexWhere(
+        (score) => score == presenceSoftmax.reduce(max),
+      );
+
+      // Parse status output (4 classes)
+      final statusScores = List<double>.from(outputStatus[0]);
+      final statusSoftmax = _softmax(statusScores);
+      final predictedStatusClass = statusSoftmax.indexWhere(
+        (score) => score == statusSoftmax.reduce(max),
       );
 
       return {
-        'prediction': _labels[predictedClass],
-        'confidence': softmaxOutput[predictedClass],
+        // Backwards compatibility for prediction_screen.dart (status)
+        'prediction': _statusLabels[predictedStatusClass],
+        'confidence': statusSoftmax[predictedStatusClass],
         'scores': {
-          for (var i = 0; i < _labels.length; i++) _labels[i]: softmaxOutput[i],
+          for (var i = 0; i < _statusLabels.length; i++) _statusLabels[i]: statusSoftmax[i],
         },
         'allPredictions': [
-          for (var i = 0; i < _labels.length; i++)
-            {'label': _labels[i], 'confidence': softmaxOutput[i]},
+          for (var i = 0; i < _statusLabels.length; i++)
+            {'label': _statusLabels[i], 'confidence': statusSoftmax[i]},
         ],
+        // New presence head predictions
+        'presencePrediction': _presenceLabels[predictedPresenceClass],
+        'presenceConfidence': presenceSoftmax[predictedPresenceClass],
+        'presenceScores': {
+          for (var i = 0; i < _presenceLabels.length; i++) _presenceLabels[i]: presenceSoftmax[i],
+        },
       };
     } catch (e) {
       print('Error running inference: $e');
@@ -122,3 +171,4 @@ class ModelService {
     }
   }
 }
+

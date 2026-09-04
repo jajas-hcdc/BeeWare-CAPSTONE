@@ -20,11 +20,11 @@
 #include <base64.h>
 
 // ======================== CONFIGURATION ========================
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID     = "GFiber_3EA45";
+const char* WIFI_PASSWORD = "XTF2eTAR";
 
 // Backend API URL (e.g., http://192.168.1.100:8000/telemetry or production server)
-const char* BACKEND_URL   = "http://192.168.1.100:8000/telemetry";
+const char* BACKEND_URL   = "http://192.168.254.112:8000/telemetry";
 const char* API_KEY       = "beeware_secret_key_default";
 const char* DEVICE_ID     = "BW-001-ALPHA"; // Must match hive deviceId in app
 

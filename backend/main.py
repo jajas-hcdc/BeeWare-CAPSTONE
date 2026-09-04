@@ -1,9 +1,18 @@
 import os
+import sys
 import json
 import base64
+import wave
 import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
+
+# Ensure UTF-8 stdout/stderr encoding on Windows to prevent UnicodeEncodeError with emojis
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Security, Depends, status
@@ -65,33 +74,52 @@ def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> str:
     return api_key or "anonymous"
 
 
-def initialize_firebase() -> firestore.Client:
+def initialize_firebase() -> Optional[firestore.Client]:
     if firebase_admin._apps:
-        return firestore.client()
+        try:
+            return firestore.client()
+        except Exception:
+            pass
 
     service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
 
+    # Dynamic relative path check for serviceAccountKey.json in the backend directory
+    default_key_path = os.path.join(os.path.dirname(__file__), "serviceAccountKey.json")
+
+    cred_path = None
     if service_account_path and os.path.exists(service_account_path):
-        cred = credentials.Certificate(service_account_path)
+        cred_path = service_account_path
+    elif os.path.exists(default_key_path):
+        cred_path = default_key_path
+    elif service_account_path:
+        # Attempt resolving relative to main.py directory if absolute path in .env was invalid
+        rel_path = os.path.join(os.path.dirname(__file__), os.path.basename(service_account_path))
+        if os.path.exists(rel_path):
+            cred_path = rel_path
+
+    if cred_path:
+        try:
+            cred = credentials.Certificate(cred_path)
+        except Exception as exc:
+            print(f"⚠️ Error loading Firebase service account certificate ({cred_path}): {exc}")
+            return None
     elif service_account_json:
         try:
             cred = credentials.Certificate(json.loads(service_account_json))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                "Invalid JSON in FIREBASE_SERVICE_ACCOUNT_JSON environment variable"
-            ) from exc
+        except Exception as exc:
+            print(f"⚠️ Invalid JSON in FIREBASE_SERVICE_ACCOUNT_JSON: {exc}")
+            return None
     else:
-        try:
-            cred = credentials.ApplicationDefault()
-        except Exception:
-            raise RuntimeError(
-                "Firebase service account not configured. Set GOOGLE_APPLICATION_CREDENTIALS "
-                "or FIREBASE_SERVICE_ACCOUNT_JSON."
-            )
+        print(f"⚠️ Firebase service account key not found at '{default_key_path}'. Running in local debug mode without Firebase.")
+        return None
 
-    firebase_admin.initialize_app(cred)
-    return firestore.client()
+    try:
+        firebase_admin.initialize_app(cred)
+        return firestore.client()
+    except Exception as exc:
+        print(f"⚠️ Firebase initialization failed: {exc}")
+        return None
 
 
 class AlertNotificationRequest(BaseModel):
@@ -115,17 +143,20 @@ class AlertNotificationRequest(BaseModel):
 
 
 class TelemetryRequest(BaseModel):
-    device_id: str = Field(..., alias="deviceId", description="ESP32 Device ID, e.g., BW-001")
-    temperature: float = Field(..., description="DHT22 Temperature in Celsius")
-    humidity: float = Field(..., description="DHT22 Relative Humidity percentage")
-    battery_level: Optional[str] = Field("90%", alias="batteryLevel", description="Battery percentage, e.g. '92%'")
+    device_id: Optional[str] = Field("BW-001-ALPHA", alias="deviceId", description="ESP32 Device ID, e.g., BW-001")
+    temperature: Optional[float] = Field(34.5, description="DHT22 Temperature in Celsius")
+    humidity: Optional[float] = Field(60.0, description="DHT22 Relative Humidity percentage")
+    battery_level: Optional[Union[int, float, str]] = Field("90%", alias="batteryLevel", description="Battery percentage, e.g. '92%' or 92")
     audio_base64: Optional[str] = Field(None, alias="audioBase64", description="INMP441 sampled audio in Base64 WAV/PCM format")
+    sample_rate: Optional[int] = Field(16000, alias="sampleRate", description="Audio sample rate in Hz (e.g. 12000 or 16000)")
     wifi_rssi: Optional[int] = Field(-65, alias="wifiRssi", description="Wi-Fi Signal Strength RSSI (dBm)")
     queen_status: Optional[str] = Field(None, alias="queenStatus", description="Pre-classified Queen status if run on edge")
     user_id: Optional[str] = Field(None, alias="userId", description="Owner user ID")
 
     class Config:
         allow_population_by_field_name = True
+        populate_by_name = True
+        extra = "allow"
 
 
 def analyze_telemetry_and_audio(
@@ -241,12 +272,67 @@ async def ingest_iot_telemetry(
     _auth: str = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Ingests live telemetry from ESP32 nodes (DHT22 temp/humidity & INMP441 audio)."""
+    # Extract & normalize fields safely
+    device_id = request.device_id or getattr(request, 'deviceId', None) or "BW-001-ALPHA"
+    temp = request.temperature if request.temperature is not None else 34.5
+    hum = request.humidity if request.humidity is not None else 60.0
+
+    raw_battery = request.battery_level if request.battery_level is not None else getattr(request, 'batteryLevel', 100)
+    if raw_battery is None:
+        raw_battery = 100
+
+    if isinstance(raw_battery, str):
+        battery_num = int(''.join(filter(str.isdigit, raw_battery)) or 100)
+    else:
+        try:
+            battery_num = int(raw_battery)
+        except Exception:
+            battery_num = 100
+
+    bat_str = f"{battery_num}%"
+
+    # Extract base64 audio string checking attribute names, model dumps, and extra fields
+    audio_b64 = getattr(request, 'audio_base64', None) or getattr(request, 'audioBase64', None)
+    if not audio_b64 and hasattr(request, 'model_dump'):
+        try:
+            data = request.model_dump(by_alias=True)
+            audio_b64 = data.get('audioBase64') or data.get('audio_base64')
+        except Exception:
+            pass
+    if not audio_b64 and hasattr(request, 'dict'):
+        try:
+            data = request.dict(by_alias=True)
+            audio_b64 = data.get('audioBase64') or data.get('audio_base64')
+        except Exception:
+            pass
+    if not audio_b64:
+        extra = getattr(request, '__pydantic_extra__', None) or {}
+        if isinstance(extra, dict):
+            audio_b64 = extra.get('audioBase64') or extra.get('audio_base64')
+
+    # Extract sample rate sent by ESP32 (default to 16000 Hz)
+    raw_sr = getattr(request, 'sample_rate', None) or getattr(request, 'sampleRate', None)
+    if not raw_sr and hasattr(request, 'model_dump'):
+        try:
+            data = request.model_dump(by_alias=True)
+            raw_sr = data.get('sampleRate') or data.get('sample_rate')
+        except Exception:
+            pass
+    if not raw_sr:
+        extra = getattr(request, '__pydantic_extra__', None) or {}
+        if isinstance(extra, dict):
+            raw_sr = extra.get('sampleRate') or extra.get('sample_rate')
+    try:
+        sample_rate = int(raw_sr) if raw_sr else 16000
+    except Exception:
+        sample_rate = 16000
+
     # 1. Run AI analysis
     analysis = analyze_telemetry_and_audio(
-        temp=request.temperature,
-        hum=request.humidity,
-        audio_b64=request.audio_base64,
-        override_status=request.queen_status,
+        temp=temp,
+        hum=hum,
+        audio_b64=audio_b64,
+        override_status=request.queen_status or getattr(request, 'queenStatus', None),
     )
 
     queen_status = analysis["status"]
@@ -258,136 +344,202 @@ async def ingest_iot_telemetry(
     explanation = analysis["explanation"]
     severity = QUEEN_STATUS_SEVERITY_MAP.get(queen_status, "Info")
 
-    # 2. Update Firestore
-    fb_client = initialize_firebase()
+    # Decode and save incoming audio payload to a playable WAV file & timestamped archive folder
+    audio_bytes_count = 0
+    if audio_b64 and len(audio_b64.strip()) > 0:
+        print(f"📥 Received Audio Base64 length: {len(audio_b64)} chars")
+        try:
+            audio_bytes = base64.b64decode(audio_b64)
+            audio_bytes_count = len(audio_bytes)
+            backend_dir = os.path.dirname(__file__)
 
-    # Search for existing hive document with this deviceId
-    hive_id = f"hive_{request.device_id.lower().replace('-', '_')}"
-    hives_ref = fb_client.collection("hives")
-    query = hives_ref.where("deviceId", "==", request.device_id).limit(1).get()
+            # Save / overwrite latest_hive_audio.wav for quick access
+            audio_filepath = os.path.join(backend_dir, "latest_hive_audio.wav")
+            with wave.open(audio_filepath, "wb") as wav_file:
+                wav_file.setnchannels(1)        # Mono
+                wav_file.setsampwidth(2)       # 16-bit (2 bytes)
+                wav_file.setframerate(sample_rate)   # Dynamic sample rate from ESP32
+                wav_file.writeframes(audio_bytes)
+            print(f"💾 Wrote {audio_bytes_count} bytes of PCM data ({sample_rate}Hz) to latest_hive_audio.wav")
 
-    if query:
-        hive_doc_ref = query[0].reference
-        hive_id = query[0].id
+            # Archive to backend/audio_recordings/ folder with timestamp
+            recordings_dir = os.path.join(backend_dir, "audio_recordings")
+            os.makedirs(recordings_dir, exist_ok=True)
+            timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_filename = f"audio_{device_id}_{timestamp_str}.wav"
+            archive_filepath = os.path.join(recordings_dir, archive_filename)
+            with wave.open(archive_filepath, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(sample_rate)
+                wav_file.writeframes(audio_bytes)
+            print(f"💾 Archived {archive_filename} ({sample_rate}Hz) to backend/audio_recordings/")
+        except Exception as exc:
+            print(f"⚠️ Failed to decode/save audio WAV file: {exc}")
     else:
-        hive_doc_ref = hives_ref.document(hive_id)
+        print("⚠️ Audio payload was empty!")
 
-    # Convert battery to standard string representation
-    bat_str = str(request.battery_level)
-    if not bat_str.endswith("%"):
-        bat_str = f"{bat_str}%"
+    # Print telemetry to terminal
+    print("\n================ 📡 TELEMETRY RECEIVED 📡 ================")
+    print(f"Device ID:     {device_id}")
+    print(f"Temperature:   {temp} °C")
+    print(f"Humidity:      {hum} %")
+    print(f"Battery Level: {bat_str} ({battery_num}%)")
+    print(f"Wi-Fi RSSI:    {request.wifi_rssi} dBm")
+    print(f"Audio Size:    {audio_bytes_count} bytes (Base64)")
+    print(f"Queen Status:  {queen_status} (Confidence: {confidence}%)")
+    print("===========================================================\n")
 
-    wifi_status = "Connected" if (request.wifi_rssi and request.wifi_rssi > -85) else "Weak Signal"
+    # 2. Update Firestore (with safe fallback if Firebase credentials are missing or failing)
+    try:
+        fb_client = initialize_firebase()
+        if not fb_client:
+            print("⚠️ Firebase unavailable. Returning local debug response.")
+            return {
+                "status": "success",
+                "message": "Telemetry received (local debug mode)",
+                "deviceId": device_id,
+                "queenStatus": queen_status,
+                "confidence": confidence,
+                "healthScore": health_score,
+            }
 
-    hive_update_data = {
-        "deviceId": request.device_id,
-        "temperature": f"{request.temperature:.1f}",
-        "humidity": f"{request.humidity:.0f}",
-        "batteryLevel": bat_str,
-        "conditionLabel": queen_status,
-        "confidence": confidence,
-        "healthScore": health_score,
-        "acoustic": acoustic_label,
-        "acousticStatus": acoustic_status,
-        "wifiStatus": wifi_status,
-        "updated": "Just now",
-        "explanation": explanation,
-        "recommendation": recommendation,
-        "isAlert": (queen_status in ["Queen Absent", "Queen Rejected"]),
-        "alertSeverity": severity,
-        "alertLabel": queen_status,
-        "alertMessage": f"ESP32 telemetry report: {explanation}",
-        "updatedAt": firestore.SERVER_TIMESTAMP,
-    }
+        # Search for existing hive document with this deviceId
+        hive_id = f"hive_{device_id.lower().replace('-', '_')}"
+        hives_ref = fb_client.collection("hives")
+        query = hives_ref.where("deviceId", "==", device_id).limit(1).get()
 
-    if request.user_id:
-        hive_update_data["userId"] = request.user_id
+        if query:
+            hive_doc_ref = query[0].reference
+            hive_id = query[0].id
+        else:
+            hive_doc_ref = hives_ref.document(hive_id)
 
-    hive_doc_ref.set(hive_update_data, merge=True)
+        wifi_status = "Connected" if (request.wifi_rssi and request.wifi_rssi > -85) else "Weak Signal"
 
-    # 3. Log time-series telemetry data point
-    log_doc = {
-        "timestamp": firestore.SERVER_TIMESTAMP,
-        "temperature": request.temperature,
-        "humidity": request.humidity,
-        "battery": request.battery_level,
-        "queenStatus": queen_status,
-        "healthScore": health_score,
-        "confidence": confidence,
-    }
-    hive_doc_ref.collection("telemetry_logs").document().set(log_doc)
+        hive_update_data = {
+            "deviceId": device_id,
+            "temperature": f"{temp:.1f}",
+            "humidity": f"{hum:.0f}",
+            "batteryLevel": bat_str,
+            "conditionLabel": queen_status,
+            "confidence": confidence,
+            "healthScore": health_score,
+            "acoustic": acoustic_label,
+            "acousticStatus": acoustic_status,
+            "wifiStatus": wifi_status,
+            "updated": "Just now",
+            "explanation": explanation,
+            "recommendation": recommendation,
+            "isAlert": (queen_status in ["Queen Absent", "Queen Rejected"]),
+            "alertSeverity": severity,
+            "alertLabel": queen_status,
+            "alertMessage": f"ESP32 telemetry report: {explanation}",
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        }
 
-    # 4. Trigger alert & FCM notification for Queen emergencies, thermal stress, or low battery
-    alert_created = False
-    alert_title = None
-    alert_body = None
+        user_id_val = request.user_id or getattr(request, 'userId', None)
+        if user_id_val:
+            hive_update_data["userId"] = user_id_val
 
-    if queen_status in ["Queen Absent", "Queen Rejected"]:
-        alert_title = f"⚠️ {queen_status} Detected!"
-        alert_body = f"Hive {request.device_id}: {recommendation}"
-    elif request.temperature > 37.0:
-        alert_title = f"🔥 High Temperature Alert ({request.temperature}°C)"
-        alert_body = f"Hive {request.device_id}: Brood overheating risk. Provide shade/ventilation."
-    elif request.temperature < 30.5:
-        alert_title = f"❄️ Low Temperature Alert ({request.temperature}°C)"
-        alert_body = f"Hive {request.device_id}: Brood chilling risk. Inspect cluster & insulation."
-    elif request.battery_level is not None and request.battery_level < 15:
-        alert_title = f"🪫 Low Battery Warning ({request.battery_level}%)"
-        alert_body = f"Hive {request.device_id}: ESP32 node battery critical. Recharge soon."
+        hive_doc_ref.set(hive_update_data, merge=True)
 
-    if alert_title:
-        alert_payload = {
+        # 3. Log time-series telemetry data point
+        log_doc = {
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "temperature": temp,
+            "humidity": hum,
+            "battery": bat_str,
+            "batteryLevelNum": battery_num,
+            "queenStatus": queen_status,
+            "healthScore": health_score,
+            "confidence": confidence,
+        }
+        hive_doc_ref.collection("telemetry_logs").document().set(log_doc)
+
+        # 4. Trigger alert & FCM notification for Queen emergencies, thermal stress, or low battery
+        alert_created = False
+        alert_title = None
+        alert_body = None
+
+        if queen_status in ["Queen Absent", "Queen Rejected"]:
+            alert_title = f"⚠️ {queen_status} Detected!"
+            alert_body = f"Hive {device_id}: {recommendation}"
+        elif temp > 37.0:
+            alert_title = f"🔥 High Temperature Alert ({temp}°C)"
+            alert_body = f"Hive {device_id}: Brood overheating risk. Provide shade/ventilation."
+        elif temp < 30.5:
+            alert_title = f"❄️ Low Temperature Alert ({temp}°C)"
+            alert_body = f"Hive {device_id}: Brood chilling risk. Inspect cluster & insulation."
+        elif battery_num < 20:
+            alert_title = f"🪫 Low Battery Warning ({battery_num}%)"
+            alert_body = f"Hive {device_id}: ESP32 node battery critical. Recharge soon."
+
+        if alert_title:
+            alert_payload = {
+                "hiveId": hive_id,
+                "queenStatus": queen_status,
+                "severity": severity if queen_status in ["Queen Absent", "Queen Rejected"] else "Warning",
+                "title": alert_title,
+                "message": alert_body,
+                "recommendation": recommendation,
+                "detectedBy": "ESP32 (INMP441 + DHT22) AI Sensor",
+                "userId": user_id_val,
+                "topic": "environment_alerts",
+                "timestamp": firestore.SERVER_TIMESTAMP,
+            }
+            fb_client.collection("alerts").document().set(alert_payload)
+            alert_created = True
+
+            # Send FCM notification with high-priority urgent channel
+            try:
+                android_config = messaging.AndroidConfig(
+                    priority="high",
+                    notification=messaging.AndroidNotification(
+                        channel_id="beeware_urgent_alerts",
+                        priority="max",
+                        default_sound=True,
+                        default_vibrate_timings=True,
+                    ),
+                )
+                msg = messaging.Message(
+                    topic="environment_alerts",
+                    notification=messaging.Notification(
+                        title=alert_title,
+                        body=alert_body,
+                    ),
+                    android=android_config,
+                    data={
+                        "hiveId": hive_id,
+                        "queenStatus": queen_status,
+                        "severity": severity,
+                    },
+                )
+                messaging.send(msg)
+            except Exception as exc:
+                print(f"⚠️ FCM send notice: {exc}")
+
+        return {
+            "status": "success",
+            "message": "Telemetry received",
+            "success": True,
+            "deviceId": device_id,
             "hiveId": hive_id,
             "queenStatus": queen_status,
-            "severity": severity if queen_status in ["Queen Absent", "Queen Rejected"] else "Warning",
-            "title": alert_title,
-            "message": alert_body,
-            "recommendation": recommendation,
-            "detectedBy": "ESP32 (INMP441 + DHT22) AI Sensor",
-            "userId": request.user_id,
-            "topic": "environment_alerts",
-            "timestamp": firestore.SERVER_TIMESTAMP,
+            "confidence": confidence,
+            "healthScore": health_score,
+            "alertTriggered": alert_created,
         }
-        fb_client.collection("alerts").document().set(alert_payload)
-        alert_created = True
-
-        # Send FCM notification with high-priority urgent channel
-        try:
-            android_config = messaging.AndroidConfig(
-                priority="high",
-                notification=messaging.AndroidNotification(
-                    channel_id="beeware_urgent_alerts",
-                    priority="max",
-                    default_sound=True,
-                    default_vibrate_timings=True,
-                ),
-            )
-            msg = messaging.Message(
-                topic="environment_alerts",
-                notification=messaging.Notification(
-                    title=alert_title,
-                    body=alert_body,
-                ),
-                android=android_config,
-                data={
-                    "hiveId": hive_id,
-                    "queenStatus": queen_status,
-                    "severity": severity,
-                },
-            )
-            messaging.send(msg)
-        except Exception as exc:
-            print(f"⚠️ FCM send notice: {exc}")
-
-    return {
-        "success": True,
-        "deviceId": request.device_id,
-        "hiveId": hive_id,
-        "queenStatus": queen_status,
-        "confidence": confidence,
-        "healthScore": health_score,
-        "alertTriggered": alert_created,
-    }
+    except Exception as exc:
+        print(f"⚠️ Firebase processing error: {exc}. Operating in local debug mode.")
+        return {
+            "status": "success",
+            "message": "Telemetry received (local debug mode)",
+            "deviceId": device_id,
+            "queenStatus": queen_status,
+            "confidence": confidence,
+            "healthScore": health_score,
+        }
 
 
 @app.post("/alerts")
@@ -477,3 +629,10 @@ async def send_alert_notification(
         "queenStatus": request.queen_status,
         "queuedTopic": "environment_alerts",
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    # This allows running the server directly with `python main.py`
+    # and binds to all interfaces (0.0.0.0) on port 8000
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

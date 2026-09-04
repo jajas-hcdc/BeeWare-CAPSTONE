@@ -20,6 +20,11 @@ class _PredictionScreenState extends State<PredictionScreen> {
   String? _currentPrediction;
   double? _confidence;
   Map<String, double>? _scores;
+  
+  // New dual-head presence variables
+  String? _currentPresencePrediction;
+  double? _presenceConfidence;
+  
   bool _isProcessing = false;
   String? _errorMessage;
   
@@ -52,6 +57,8 @@ class _PredictionScreenState extends State<PredictionScreen> {
       _errorMessage = null;
       _currentPrediction = null;
       _confidence = null;
+      _currentPresencePrediction = null;
+      _presenceConfidence = null;
     });
     
     try {
@@ -78,6 +85,8 @@ class _PredictionScreenState extends State<PredictionScreen> {
         _currentPrediction = result['prediction'];
         _confidence = result['confidence'];
         _scores = Map<String, double>.from(result['scores']);
+        _currentPresencePrediction = result['presencePrediction'];
+        _presenceConfidence = result['presenceConfidence'];
         _isProcessing = false;
       });
       
@@ -172,7 +181,7 @@ class _PredictionScreenState extends State<PredictionScreen> {
             if (_errorMessage != null) const SizedBox(height: 16),
             
             // Prediction Result
-            if (_currentPrediction != null)
+            if (_currentPresencePrediction != null || _currentPrediction != null)
               Card(
                 elevation: 4,
                 child: Padding(
@@ -186,23 +195,62 @@ class _PredictionScreenState extends State<PredictionScreen> {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      Text(
-                        _currentPrediction!,
-                        style: const TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue,
+                      const Divider(height: 24),
+                      if (_currentPresencePrediction != null) ...[
+                        const Text(
+                          'Colony Presence Status',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Confidence: ${(_confidence! * 100).toStringAsFixed(2)}%',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey,
+                        const SizedBox(height: 4),
+                        Text(
+                          _currentPresencePrediction!,
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: _currentPresencePrediction!.contains('Present') 
+                                ? Colors.green 
+                                : Colors.red,
+                          ),
                         ),
-                      ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Confidence: ${(_presenceConfidence! * 100).toStringAsFixed(2)}%',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      if (_currentPrediction != null) ...[
+                        const Text(
+                          'Detailed Queen Status',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _currentPrediction!,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Confidence: ${(_confidence! * 100).toStringAsFixed(2)}%',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -271,19 +319,20 @@ class _PredictionScreenState extends State<PredictionScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
+                  children: const [
+                    Text(
                       'Model Information',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    const Text('• Accuracy: 67.39%'),
-                    const Text('• Input: MFCC Features (120×130)'),
-                    const Text('• Classes: 4 Queen States'),
-                    const Text('• Model Size: 0.31 MB'),
+                    SizedBox(height: 8),
+                    Text('• Accuracy: 74.2%'),
+                    Text('• Input: Spectrogram (128×128)'),
+                    Text('• Outputs: Dual Head (Presence + Status)'),
+                    Text('• Classes: 2 Presence States, 4 Status States'),
+                    Text('• Model Size: 0.03 MB (30 KB)'),
                   ],
                 ),
               ),

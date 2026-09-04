@@ -22,7 +22,6 @@ class HiveService extends ChangeNotifier {
   StreamSubscription<QuerySnapshot>? _hivesSubscription;
   StreamSubscription? _authSubscription;
   Timer? _debounceTimer;
-  String? _currentUserId;
 
   List<HiveData> get hives => List.unmodifiable(_hives);
 
@@ -38,19 +37,17 @@ class HiveService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final jsonList = _hives.map((h) => h.toJson()).toList();
       final encoded = jsonEncode(jsonList);
-      final uid = _currentUserId ?? 'global';
-      await prefs.setString('beeware_cached_hives_$uid', encoded);
+      await prefs.setString('beeware_cached_hives_shared', encoded);
       await prefs.setString('beeware_cached_hives_latest', encoded);
     } catch (e) {
       debugPrint('Error saving hives to cache: $e');
     }
   }
 
-  Future<void> _loadFromCache([String? uid]) async {
+  Future<void> _loadFromCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final userKey = uid ?? _currentUserId ?? 'latest';
-      String? raw = prefs.getString('beeware_cached_hives_$userKey');
+      String? raw = prefs.getString('beeware_cached_hives_shared');
       raw ??= prefs.getString('beeware_cached_hives_latest');
 
       if (raw != null && raw.isNotEmpty) {
@@ -72,11 +69,9 @@ class HiveService extends ChangeNotifier {
     try {
       _authSubscription = AuthService().authStateChanges().listen((user) {
         if (user != null && !user.isAnonymous) {
-          _currentUserId = user.uid;
-          _loadFromCache(user.uid);
-          _initFirestoreStream(user.uid);
+          _loadFromCache();
+          _initFirestoreStream();
         } else {
-          _currentUserId = null;
           _hivesSubscription?.cancel();
           _hives = [];
           _debouncedNotify();
@@ -87,19 +82,15 @@ class HiveService extends ChangeNotifier {
     }
   }
 
-  void _initFirestoreStream(String userId) {
+  void _initFirestoreStream() {
     _hivesSubscription?.cancel();
     try {
       _hivesSubscription = FirebaseFirestore.instance
           .collection('hives')
           .snapshots()
           .listen((snapshot) {
-        final allDocs = snapshot.docs;
-        _hives = allDocs.where((doc) {
-          final data = doc.data();
-          final docUserId = data['userId'] as String?;
-          return docUserId == null || docUserId == userId || docUserId.isEmpty;
-        }).map((doc) {
+        // Shared Apiary: All authenticated accounts see all active hives in real time
+        _hives = snapshot.docs.map((doc) {
           return HiveData.fromFirestore(doc.id, doc.data());
         }).toList();
 
@@ -117,21 +108,14 @@ class HiveService extends ChangeNotifier {
   /// Manually trigger a fresh cloud fetch (e.g. pull to refresh or reconnection)
   Future<void> refreshFromCloud() async {
     try {
-      final user = AuthService().currentUser;
-      final userId = user?.uid ?? _currentUserId;
-
       final snapshot = await FirebaseFirestore.instance
           .collection('hives')
           .get()
           .timeout(const Duration(seconds: 6));
 
       if (snapshot.docs.isNotEmpty) {
-        final allDocs = snapshot.docs;
-        _hives = allDocs.where((doc) {
-          final data = doc.data();
-          final docUserId = data['userId'] as String?;
-          return docUserId == null || (userId != null && docUserId == userId) || docUserId.isEmpty;
-        }).map((doc) {
+        // Shared Apiary: All accounts get the complete synchronized list of hives
+        _hives = snapshot.docs.map((doc) {
           return HiveData.fromFirestore(doc.id, doc.data());
         }).toList();
 
