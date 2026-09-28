@@ -12,7 +12,6 @@ class NotificationSettingsScreen extends StatefulWidget {
 
 class _NotificationSettingsScreenState extends State<NotificationSettingsScreen> {
   final AlertService _alertService = AlertService();
-  bool _isTesting = false;
 
   @override
   void initState() {
@@ -30,34 +29,6 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
     if (mounted) setState(() {});
   }
 
-  Future<void> _handleTestNotification() async {
-    setState(() => _isTesting = true);
-    await _alertService.triggerTestAlert();
-    if (mounted) {
-      setState(() => _isTesting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Row(
-            children: [
-              Icon(Icons.check_circle_outline, color: Colors.black, size: 20),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Test notification triggered successfully! Check your notification banner above.',
-                  style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: AppColors.primaryYellow,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          duration: const Duration(seconds: 4),
-        ),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final pushEnabled = _alertService.pushEnabled;
@@ -66,13 +37,12 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
     return Scaffold(
       backgroundColor: AppColors.screenYellow,
       appBar: const CustomHeaderBar(
-        title: 'Notification Settings',
+        title: 'Notification',
         showBack: true,
       ),
-      body: SingleChildScrollView(
+      body: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Push Notifications Tile
             Container(
@@ -164,85 +134,9 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                 ],
               ),
             ),
-            const SizedBox(height: 20),
-
-            // Diagnostic & Test Button
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: AppStyles.cardDecoration(borderRadius: BorderRadius.circular(16)),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.network_check_rounded, color: Colors.black, size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        'Notification System Status',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.black),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _buildStatusRow('Service', 'Firebase Cloud Messaging (FCM)', Icons.cloud_done_rounded, Colors.green),
-                  const SizedBox(height: 6),
-                  _buildStatusRow('Topic Channel', 'environment_alerts', Icons.campaign_rounded, Colors.black87),
-                  const SizedBox(height: 6),
-                  _buildStatusRow('Android Priority', 'High (Urgent Banner & Sound)', Icons.priority_high_rounded, Colors.orange),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryYellow,
-                        foregroundColor: Colors.black,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: const BorderSide(color: Colors.black, width: 2),
-                        ),
-                      ),
-                      onPressed: _isTesting ? null : _handleTestNotification,
-                      icon: _isTesting
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.black)),
-                            )
-                          : const Icon(Icons.send_rounded, size: 18),
-                      label: Text(
-                        _isTesting ? 'Sending Test Alert...' : 'Send Test Notification',
-                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildStatusRow(String label, String value, IconData icon, Color iconColor) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: iconColor),
-        const SizedBox(width: 8),
-        Text(
-          '$label: ',
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black54),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.black),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
     );
   }
 }
