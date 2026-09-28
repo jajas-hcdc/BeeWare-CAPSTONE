@@ -506,7 +506,7 @@ def send_fcm_telemetry_notification(
             android=messaging.AndroidConfig(
                 priority="high",
                 notification=messaging.AndroidNotification(
-                    channel_id="beeware_high_importance_channel",
+                    channel_id="beeware_urgent_alerts",
                     priority="high",
                     default_sound=True,
                     default_vibrate_timings=True,
