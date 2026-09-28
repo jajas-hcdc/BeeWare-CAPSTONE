@@ -84,7 +84,65 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     if (hist.isNotEmpty) {
       return _sliceForTimeframe(hist);
     }
+    final rawStr = widget.hive.acoustic.replaceAll('Hz', '').trim();
+    final cur = double.tryParse(rawStr);
+    if (cur != null && cur > 0) {
+      final dbVal = cur > 100 ? (cur / 5.0).clamp(20.0, 72.0) : cur;
+      return [dbVal];
+    }
     return [];
+  }
+
+  ({List<double> values, List<String> dates}) _prepareChartData(
+    List<double> rawValues,
+    List<String> rawDates,
+  ) {
+    if (rawValues.isEmpty) {
+      return (values: <double>[], dates: <String>[]);
+    }
+
+    final firstValid = rawValues.indexWhere((v) => v > 0.0);
+    List<double> cleanValues;
+    List<String> cleanDates;
+
+    if (firstValid == -1) {
+      cleanValues = [rawValues.last];
+      cleanDates = rawDates.isNotEmpty ? [rawDates.last] : ['Live'];
+    } else {
+      cleanValues = rawValues.sublist(firstValid);
+      if (rawDates.length == rawValues.length) {
+        cleanDates = rawDates.sublist(firstValid);
+      } else {
+        cleanDates = rawDates;
+      }
+    }
+
+    final targetLen = cleanValues.length;
+    List<String> alignedDates;
+
+    if (targetLen == 1) {
+      alignedDates = [cleanDates.isNotEmpty ? cleanDates.last : 'Live'];
+    } else if (cleanDates.length == targetLen) {
+      alignedDates = List<String>.from(cleanDates);
+    } else if (cleanDates.length > targetLen) {
+      alignedDates = cleanDates.sublist(cleanDates.length - targetLen);
+    } else {
+      alignedDates = List<String>.filled(targetLen, '');
+      final latest = cleanDates.isNotEmpty ? cleanDates.last : 'Live';
+      alignedDates[targetLen - 1] = latest;
+      for (int i = targetLen - 2; i >= 0; i--) {
+        final stepsAgo = targetLen - 1 - i;
+        final minsAgo = stepsAgo * 5;
+        if (minsAgo < 60) {
+          alignedDates[i] = '-${minsAgo}m';
+        } else {
+          final hrs = minsAgo ~/ 60;
+          alignedDates[i] = '-${hrs}h';
+        }
+      }
+    }
+
+    return (values: cleanValues, dates: alignedDates);
   }
 
   @override
@@ -221,37 +279,53 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
   Widget _buildScrollableChart({
     required Widget chart,
     required int dataLength,
-    double height = 160,
+    double height = 150,
   }) {
-    // Allocate 50px per date to allow smooth horizontal panning
-    final chartWidth = max(320.0, dataLength * 52.0);
+    final bool needsScroll = dataLength > 6;
+    final chartWidth = needsScroll ? (dataLength * 48.0) : double.infinity;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        SizedBox(
-          height: height,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: SizedBox(
-              width: chartWidth,
+    Widget chartContent = SizedBox(
+      height: height,
+      width: chartWidth,
+      child: ClipRect(
+        child: RepaintBoundary(child: chart),
+      ),
+    );
+
+    if (needsScroll) {
+      chartContent = SizedBox(
+        height: height,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: SizedBox(
+            width: chartWidth,
+            child: ClipRect(
               child: RepaintBoundary(child: chart),
             ),
           ),
         ),
-        const SizedBox(height: 6),
-        const Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Icon(Icons.swipe_left, size: 13, color: Colors.black38),
-            SizedBox(width: 4),
-            Text(
-              'Swipe horizontally for more dates',
-              style: TextStyle(fontSize: 9, color: Colors.black45, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        chartContent,
+        if (needsScroll) ...[
+          const SizedBox(height: 6),
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Icon(Icons.swipe_left, size: 13, color: Colors.black38),
+              SizedBox(width: 4),
+              Text(
+                'Swipe horizontally for more dates',
+                style: TextStyle(fontSize: 9, color: Colors.black45, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -289,12 +363,16 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       );
     }
 
-    final temps = rawTemps.length == 1 ? [rawTemps[0], rawTemps[0]] : rawTemps;
-    final chartDates = dates.length == 1 ? [dates[0], dates[0]] : dates;
-    final validTemps = rawTemps.where((t) => t > 0.0).toList();
+    final prepared = _prepareChartData(rawTemps, dates);
+    final temps = prepared.values;
+    final chartDates = prepared.dates;
+    final validTemps = temps.where((t) => t > 0.0).toList();
     final avgTemp = validTemps.isNotEmpty
         ? (validTemps.reduce((a, b) => a + b) / validTemps.length).toStringAsFixed(1)
-        : (rawTemps.isNotEmpty ? rawTemps.last.toStringAsFixed(1) : '34.0');
+        : (temps.isNotEmpty ? temps.last.toStringAsFixed(1) : '34.0');
+
+    final maxVal = temps.isNotEmpty ? temps.reduce(max) : 36.0;
+    final double maxY = max(45.0, ((maxVal / 5).ceil() * 5).toDouble());
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -346,11 +424,13 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           const SizedBox(height: 14),
 
           _buildScrollableChart(
-            dataLength: chartDates.length,
+            dataLength: temps.length,
             height: 150,
             chart: BarChart(
               BarChartData(
-                maxY: 45,
+                minY: 0,
+                maxY: maxY,
+                alignment: temps.length <= 4 ? BarChartAlignment.spaceEvenly : BarChartAlignment.spaceAround,
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
@@ -376,17 +456,18 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                       reservedSize: 22,
                       interval: 1,
                       getTitlesWidget: (val, meta) {
-                        final idx = val.toInt();
-                        if (idx >= 0 && idx < chartDates.length) {
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(
-                              chartDates[idx],
-                              style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
-                            ),
-                          );
-                        }
-                        return const SizedBox.shrink();
+                        final idx = val.round();
+                        if ((val - idx).abs() > 0.05) return const SizedBox.shrink();
+                        if (idx < 0 || idx >= chartDates.length) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            chartDates[idx],
+                            style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
                       },
                     ),
                   ),
@@ -401,13 +482,15 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   final barColor = isOptimal
                       ? AppColors.healthyGreen
                       : (isHot ? const Color(0xFFE65100) : const Color(0xFFFFB300));
+                  final safeToY = t.clamp(0.0, maxY * 0.92);
+
                   return BarChartGroupData(
                     x: i,
                     barRods: [
                       BarChartRodData(
-                        toY: t < 0.0 ? 0.0 : t,
+                        toY: safeToY,
                         color: t <= 0.0 ? Colors.grey.shade400 : barColor,
-                        width: 14,
+                        width: temps.length == 1 ? 24 : 14,
                         borderRadius: const BorderRadius.only(
                           topLeft: Radius.circular(4),
                           topRight: Radius.circular(4),
@@ -457,12 +540,15 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       );
     }
 
-    final hums = rawHums.length == 1 ? [rawHums[0], rawHums[0]] : rawHums;
-    final chartDates = dates.length == 1 ? [dates[0], dates[0]] : dates;
-    final validHums = rawHums.where((h) => h > 0.0).toList();
+    final prepared = _prepareChartData(rawHums, dates);
+    final hums = prepared.values;
+    final chartDates = prepared.dates;
+    final validHums = hums.where((h) => h > 0.0).toList();
     final avgHum = validHums.isNotEmpty
         ? (validHums.reduce((a, b) => a + b) / validHums.length).toStringAsFixed(0)
-        : (rawHums.isNotEmpty ? rawHums.last.toStringAsFixed(0) : '60');
+        : (hums.isNotEmpty ? hums.last.toStringAsFixed(0) : '60');
+
+    const double maxY = 100.0;
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -514,11 +600,13 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           const SizedBox(height: 14),
 
           _buildScrollableChart(
-            dataLength: chartDates.length,
+            dataLength: hums.length,
             height: 150,
             chart: BarChart(
               BarChartData(
-                maxY: 100,
+                minY: 0,
+                maxY: maxY,
+                alignment: hums.length <= 4 ? BarChartAlignment.spaceEvenly : BarChartAlignment.spaceAround,
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
@@ -544,17 +632,18 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                       reservedSize: 22,
                       interval: 1,
                       getTitlesWidget: (val, meta) {
-                        final idx = val.toInt();
-                        if (idx >= 0 && idx < chartDates.length) {
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(
-                              chartDates[idx],
-                              style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
-                            ),
-                          );
-                        }
-                        return const SizedBox.shrink();
+                        final idx = val.round();
+                        if ((val - idx).abs() > 0.05) return const SizedBox.shrink();
+                        if (idx < 0 || idx >= chartDates.length) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            chartDates[idx],
+                            style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
                       },
                     ),
                   ),
@@ -568,13 +657,15 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   final barColor = isOptimal
                       ? const Color(0xFF0288D1)
                       : (h > 80.0 ? const Color(0xFF01579B) : const Color(0xFFFFB300));
+                  final safeToY = h.clamp(0.0, 94.0);
+
                   return BarChartGroupData(
                     x: i,
                     barRods: [
                       BarChartRodData(
-                        toY: h < 0.0 ? 0.0 : h,
+                        toY: safeToY,
                         color: h <= 0.0 ? Colors.grey.shade400 : barColor,
-                        width: 14,
+                        width: hums.length == 1 ? 24 : 14,
                         borderRadius: const BorderRadius.only(
                           topLeft: Radius.circular(4),
                           topRight: Radius.circular(4),
@@ -624,8 +715,13 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       );
     }
 
-    final acoustics = rawAcoustics.length == 1 ? [rawAcoustics[0], rawAcoustics[0]] : rawAcoustics;
-    final chartDates = dates.length == 1 ? [dates[0], dates[0]] : dates;
+    final prepared = _prepareChartData(rawAcoustics, dates);
+    final acoustics = prepared.values;
+    final chartDates = prepared.dates;
+    final validAcoustics = acoustics.where((a) => a > 0.0).toList();
+    final avgDb = validAcoustics.isNotEmpty
+        ? (validAcoustics.map((v) => v > 100.0 ? (v / 5.0).clamp(20.0, 70.0) : v).reduce((a, b) => a + b) / validAcoustics.length).toStringAsFixed(0)
+        : (acoustics.isNotEmpty ? (acoustics.last > 100.0 ? (acoustics.last / 5.0).clamp(20.0, 70.0) : acoustics.last).toStringAsFixed(0) : '55');
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -633,10 +729,10 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
+              const Row(
                 children: [
                   Icon(Icons.graphic_eq, size: 20, color: AppColors.healthyGreen),
                   SizedBox(width: 6),
@@ -646,16 +742,44 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   ),
                 ],
               ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.healthyGreenBg,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Avg: $avgDb dB',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.healthyGreen),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: const BoxDecoration(color: AppColors.healthyGreen, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 4),
+              const Text(
+                'Normal Hive Hum Zone (40 dB - 65 dB)',
+                style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
+              ),
             ],
           ),
           const SizedBox(height: 14),
 
           _buildScrollableChart(
-            dataLength: chartDates.length,
+            dataLength: acoustics.length,
             height: 150,
             chart: BarChart(
               BarChartData(
+                minY: 0,
                 maxY: 80,
+                alignment: acoustics.length <= 4 ? BarChartAlignment.spaceEvenly : BarChartAlignment.spaceAround,
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
@@ -679,18 +803,20 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                     sideTitles: SideTitles(
                       showTitles: true,
                       reservedSize: 22,
+                      interval: 1,
                       getTitlesWidget: (val, meta) {
-                        final idx = val.toInt();
-                        if (idx >= 0 && idx < chartDates.length) {
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(
-                              chartDates[idx],
-                              style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
-                            ),
-                          );
-                        }
-                        return const SizedBox.shrink();
+                        final idx = val.round();
+                        if ((val - idx).abs() > 0.05) return const SizedBox.shrink();
+                        if (idx < 0 || idx >= chartDates.length) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            chartDates[idx],
+                            style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
                       },
                     ),
                   ),
@@ -699,14 +825,19 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 ),
                 borderData: FlBorderData(show: false),
                 barGroups: List.generate(acoustics.length, (i) {
-                  final isHigh = acoustics[i] > 65;
+                  final raw = acoustics[i];
+                  final normalized = raw > 100.0 ? (raw / 5.0).clamp(20.0, 70.0) : raw;
+                  final safeToY = normalized.clamp(0.0, 72.0);
+                  final isHigh = safeToY > 65;
                   return BarChartGroupData(
                     x: i,
                     barRods: [
                       BarChartRodData(
-                        toY: acoustics[i],
-                        color: isHigh ? const Color(0xFFE65100) : AppColors.healthyGreen,
-                        width: 14,
+                        toY: safeToY,
+                        color: safeToY <= 0.0
+                            ? Colors.grey.shade400
+                            : (isHigh ? const Color(0xFFE65100) : AppColors.healthyGreen),
+                        width: acoustics.length == 1 ? 24 : 14,
                         borderRadius: const BorderRadius.only(
                           topLeft: Radius.circular(4),
                           topRight: Radius.circular(4),
