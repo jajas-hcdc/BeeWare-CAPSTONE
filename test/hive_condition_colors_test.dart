@@ -151,6 +151,50 @@ void main() {
       final absentDot = dotContainers[1].decoration as BoxDecoration;
       expect(absentDot.color, AppColors.queenAbsentRed);
     });
+
+    testWidgets('Queen Absent conditionLabel automatically activates Queen Absent Detected and sets proper recommendation even if flag was false', (tester) async {
+      // Simulating a hive loaded from Firestore with conditionLabel 'Queen Absent' but legacy queenAbsentDetected false
+      final hive = HiveData.fromFirestore('test_doc', {
+        'name': 'Test Queen Absent Hive',
+        'conditionLabel': 'Queen Absent',
+        'confidence': 96,
+        'healthScore': 40,
+        'temperature': '33.2',
+        'humidity': '58',
+        'frequency': 380,
+        'queenPresentDetected': false,
+        'queenAbsentDetected': false, // Legacy or un-updated flag
+        'recommendation': 'Continue routine monitoring. No intervention required.',
+      });
+
+      expect(hive.isQueenAbsentDetected, isTrue);
+      expect(hive.isQueenPresentDetected, isFalse);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: HiveDetailScreen(hive: hive, initialTab: 2),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Find "Queen Absent" - should be black & bold
+      final queenAbsentFinder = conditionRowFinder('Queen Absent');
+      expect(queenAbsentFinder, findsOneWidget);
+      final Text absentTextWidget = tester.widget(queenAbsentFinder);
+      expect(absentTextWidget.style?.color, Colors.black);
+      expect(absentTextWidget.style?.fontWeight, FontWeight.w800);
+
+      // Verify "Detected" is red
+      final detectedFinder = find.text('Detected');
+      expect(detectedFinder, findsOneWidget);
+      final Text detectedTextWidget = tester.widget(detectedFinder);
+      expect(detectedTextWidget.style?.color, AppColors.queenAbsentRed);
+
+      // Verify the AI Recommendation shows emergency queen cell inspection
+      expect(find.textContaining('Inspect frames for emergency queen cells'), findsOneWidget);
+    });
   });
 }
 

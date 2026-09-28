@@ -316,21 +316,39 @@ class HiveService extends ChangeNotifier {
 
       if (index != -1) {
         final existing = _hives[index];
+        final effectiveCond = condLabel ?? existing.conditionLabel;
+        final isAbs = effectiveCond.toLowerCase().contains('absent');
+        final isRej = effectiveCond.toLowerCase().contains('rejected');
+        final isAcc = effectiveCond.toLowerCase().contains('accepted');
+        final isPres = !isAbs && !isRej && !isAcc && hasAcoustic;
+
         _hives[index] = existing.copyWith(
-          conditionLabel: condLabel ?? existing.conditionLabel,
+          conditionLabel: effectiveCond,
           confidence: conf ?? (!hasAcoustic ? 50 : existing.confidence),
           healthScore: effectiveHealth,
           temperature: temp.toStringAsFixed(1),
           humidity: hum.toStringAsFixed(0),
           acoustic: acousticStr,
           acousticStatus: acousticStatusStr,
-          isAlert: !hasAcoustic || existing.isAlert,
-          alertSeverity: !hasAcoustic ? 'Critical' : existing.alertSeverity,
-          alertLabel: !hasAcoustic ? '⚠️ Acoustic Signal Not Detected (0 Hz)' : existing.alertLabel,
+          isAlert: !hasAcoustic || isAbs || isRej || existing.isAlert,
+          alertSeverity: !hasAcoustic ? 'Critical' : (isAbs ? 'Critical' : (isRej ? 'Warning' : existing.alertSeverity)),
+          alertLabel: !hasAcoustic ? '⚠️ Acoustic Signal Not Detected (0 Hz)' : (isAbs ? 'Queen Absent' : (isRej ? 'Queen Rejected' : existing.alertLabel)),
           alertMessage: !hasAcoustic
               ? 'Acoustic microphone on ${existing.name} is detecting 0 Hz (silent or disconnected).'
-              : existing.alertMessage,
-          queenPresentDetected: !hasAcoustic ? false : existing.queenPresentDetected,
+              : (isAbs ? 'Colony is Queenless.' : (isRej ? 'Colony rejecting queen.' : existing.alertMessage)),
+          queenPresentDetected: hasAcoustic && isPres,
+          queenAbsentDetected: hasAcoustic && isAbs,
+          queenAcceptedDetected: hasAcoustic && isAcc,
+          queenRejectedDetected: hasAcoustic && isRej,
+          recommendation: isAbs
+              ? 'Inspect frames for emergency queen cells or introduce a new mated queen promptly.'
+              : (isRej
+                  ? 'Check release cage immediately and examine worker agitation.'
+                  : (isAcc
+                      ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
+                      : (existing.recommendation.toLowerCase().contains('routine') && (isAbs || isRej)
+                          ? 'Inspect hive immediately.'
+                          : existing.recommendation))),
           batteryLevel: '$batt%',
           wifiStatus: 'Connected',
           signalBars: signalBars,

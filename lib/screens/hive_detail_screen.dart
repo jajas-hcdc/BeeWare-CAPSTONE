@@ -991,25 +991,25 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
               const Divider(color: Colors.black12, height: 18),
               _conditionDetectRow(
                 'Queen Present',
-                isAcousticNotDetected ? false : _hive.queenPresentDetected,
+                isAcousticNotDetected ? false : _hive.isQueenPresentDetected,
                 isDimmed: isAcousticNotDetected,
               ),
               const Divider(color: Colors.black12, height: 18),
               _conditionDetectRow(
                 'Queen Absent',
-                isAcousticNotDetected ? false : _hive.queenAbsentDetected,
+                isAcousticNotDetected ? false : _hive.isQueenAbsentDetected,
                 isDimmed: isAcousticNotDetected,
               ),
               const Divider(color: Colors.black12, height: 18),
               _conditionDetectRow(
                 'Queen Accepted',
-                isAcousticNotDetected ? false : _hive.queenAcceptedDetected,
+                isAcousticNotDetected ? false : _hive.isQueenAcceptedDetected,
                 isDimmed: isAcousticNotDetected,
               ),
               const Divider(color: Colors.black12, height: 18),
               _conditionDetectRow(
                 'Queen Rejected',
-                isAcousticNotDetected ? false : _hive.queenRejectedDetected,
+                isAcousticNotDetected ? false : _hive.isQueenRejectedDetected,
                 isDimmed: isAcousticNotDetected,
               ),
             ],
@@ -1050,47 +1050,104 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
         const SizedBox(height: 14),
 
         // AI Recommendation Card
-        Container(
-          padding: const EdgeInsets.all(16.0),
-          decoration: AppStyles.cardDecoration(
-            color: hasSensorNotDetected ? const Color(0xFFFFF8E1) : AppColors.infoBlueBg,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                hasSensorNotDetected ? Icons.lightbulb_outline : Icons.info_outline,
-                color: hasSensorNotDetected ? const Color(0xFFF57F17) : Colors.black87,
-                size: 22,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'AI Recommendation',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        color: hasSensorNotDetected ? const Color(0xFFE65100) : Colors.black,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      isAcousticNotDetected
-                          ? '⚠️ No buzz detected: Colony acoustics are currently silent (0 Hz). Ensure the microphone is connected and verify if bees are active in the hive box.\n\n${_hive.recommendation}'
-                          : (hasSensorNotDetected
-                              ? '⚠️ Sensor Data Missing: Connect offline sensors for accurate colony diagnosis.\n\n${_hive.recommendation}'
-                              : _hive.recommendation),
-                      style: const TextStyle(fontSize: 12, color: Colors.black87, height: 1.3),
-                    ),
-                  ],
+        () {
+          final isAbsentActive = !isAcousticNotDetected && _hive.isQueenAbsentDetected;
+          final isRejectedActive = !isAcousticNotDetected && _hive.isQueenRejectedDetected;
+          final isAcceptedActive = !isAcousticNotDetected && _hive.isQueenAcceptedDetected;
+
+          String recText = _hive.recommendation;
+          if (isAcousticNotDetected) {
+            recText =
+                '⚠️ No buzz detected: Colony acoustics are currently silent (0 Hz). Ensure the microphone is connected and verify if bees are active in the hive box.\n\n${_hive.recommendation}';
+          } else if (hasSensorNotDetected) {
+            recText =
+                '⚠️ Sensor Data Missing: Connect offline sensors for accurate colony diagnosis.\n\n${_hive.recommendation}';
+          } else if (isAbsentActive &&
+              (recText.toLowerCase().contains('routine') ||
+                  recText.toLowerCase().contains('queenright') ||
+                  recText.toLowerCase().contains('no intervention'))) {
+            recText =
+                'Inspect frames for emergency queen cells or introduce a new mated queen promptly.';
+          } else if (isRejectedActive &&
+              (recText.toLowerCase().contains('routine') ||
+                  recText.toLowerCase().contains('no intervention'))) {
+            recText =
+                'Check release cage immediately and examine worker agitation to prevent queen injury.';
+          } else if (isAcceptedActive &&
+              (recText.toLowerCase().contains('routine') ||
+                  recText.toLowerCase().contains('no intervention'))) {
+            recText =
+                'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.';
+          }
+
+          final Color recBgColor = hasSensorNotDetected
+              ? const Color(0xFFFFF8E1)
+              : (isAbsentActive
+                  ? const Color(0xFFFFEBEE)
+                  : (isRejectedActive
+                      ? const Color(0xFFFFF3E0)
+                      : AppColors.infoBlueBg));
+
+          final IconData recIcon = hasSensorNotDetected
+              ? Icons.lightbulb_outline
+              : (isAbsentActive || isRejectedActive
+                  ? Icons.warning_amber_rounded
+                  : Icons.info_outline);
+
+          final Color recIconColor = hasSensorNotDetected
+              ? const Color(0xFFF57F17)
+              : (isAbsentActive
+                  ? const Color(0xFFC62828)
+                  : (isRejectedActive
+                      ? const Color(0xFFE65100)
+                      : Colors.black87));
+
+          final Color recTitleColor = hasSensorNotDetected
+              ? const Color(0xFFE65100)
+              : (isAbsentActive
+                  ? const Color(0xFFB71C1C)
+                  : (isRejectedActive
+                      ? const Color(0xFFE65100)
+                      : Colors.black));
+
+          return Container(
+            padding: const EdgeInsets.all(16.0),
+            decoration: AppStyles.cardDecoration(
+              color: recBgColor,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  recIcon,
+                  color: recIconColor,
+                  size: 22,
                 ),
-              ),
-            ],
-          ),
-        ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'AI Recommendation',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: recTitleColor,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        recText,
+                        style: const TextStyle(fontSize: 12, color: Colors.black87, height: 1.3),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }(),
 
         // Below the AI Recommendation: Sensor Connection & Diagnostic Advisory Card
         if (hasSensorNotDetected) ...[

@@ -113,6 +113,36 @@ class HiveData {
     return 'Last seen: $updated';
   }
 
+  bool get isAcousticNotDetected {
+    final clean = acoustic.trim().toLowerCase();
+    return clean == '0' ||
+        clean == '0 hz' ||
+        clean.startsWith('0 ') ||
+        acousticStatus.toLowerCase().contains('not detected');
+  }
+
+  bool get isQueenAbsentDetected =>
+      !isAcousticNotDetected &&
+      (queenAbsentDetected || conditionLabel.toLowerCase().contains('absent'));
+
+  bool get isQueenAcceptedDetected =>
+      !isAcousticNotDetected &&
+      (queenAcceptedDetected || conditionLabel.toLowerCase().contains('accepted'));
+
+  bool get isQueenRejectedDetected =>
+      !isAcousticNotDetected &&
+      (queenRejectedDetected || conditionLabel.toLowerCase().contains('rejected'));
+
+  bool get isQueenPresentDetected =>
+      !isAcousticNotDetected &&
+      !isQueenAbsentDetected &&
+      !isQueenAcceptedDetected &&
+      !isQueenRejectedDetected &&
+      (queenPresentDetected ||
+          conditionLabel.toLowerCase().contains('present') ||
+          conditionLabel.toLowerCase().contains('healthy') ||
+          conditionLabel.isEmpty);
+
   HiveData copyWith({
     String? id,
     String? name,
@@ -235,6 +265,34 @@ class HiveData {
       return fallback;
     }
 
+    final bool queenAbsentVal = !isAcousticZero && (isAbsent || data['queenAbsentDetected'] == true);
+    final bool queenAcceptedVal = !isAcousticZero && (isAccepted || data['queenAcceptedDetected'] == true);
+    final bool queenRejectedVal = !isAcousticZero && (isRejected || data['queenRejectedDetected'] == true);
+    final bool queenPresentVal = !isAcousticZero &&
+        !queenAbsentVal &&
+        !queenAcceptedVal &&
+        !queenRejectedVal &&
+        (isPresent || data['queenPresentDetected'] == true);
+
+    final rawRec = data['recommendation']?.toString();
+    final bool isDefaultRoutineRec = rawRec == null ||
+        rawRec.isEmpty ||
+        rawRec.toLowerCase().contains('routine monitoring') ||
+        rawRec.toLowerCase().contains('queenright and stable') ||
+        rawRec.toLowerCase().contains('no intervention');
+
+    final String computedRec = (rawRec != null && !isDefaultRoutineRec)
+        ? rawRec
+        : (isAcousticZero
+            ? 'Check INMP441 I2S microphone wiring and examine hive for activity.'
+            : (queenAbsentVal
+                ? 'Inspect frames for emergency queen cells or introduce a new mated queen promptly.'
+                : (queenRejectedVal
+                    ? 'Check release cage immediately and examine worker agitation.'
+                    : (queenAcceptedVal
+                        ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
+                        : 'Colony is queenright and stable. Continue regular monitoring.'))));
+
     return HiveData(
       id: id,
       name: data['name'] ?? 'Hive',
@@ -253,18 +311,11 @@ class HiveData {
       signalBars: (data['signalBars'] as num?)?.toInt() ?? 4,
       explanation: data['explanation'] ??
           'The AI analyzed the hive\'s acoustic, temperature, and humidity data and classified the colony state.',
-      queenPresentDetected: data['queenPresentDetected'] ?? isPresent,
-      queenAbsentDetected: data['queenAbsentDetected'] ?? isAbsent,
-      queenAcceptedDetected: data['queenAcceptedDetected'] ?? isAccepted,
-      queenRejectedDetected: data['queenRejectedDetected'] ?? isRejected,
-      recommendation: data['recommendation'] ??
-          (isAcousticZero
-              ? 'Check INMP441 I2S microphone wiring and examine hive for activity.'
-              : (isAbsent
-                  ? 'Inspect frames for emergency queen cells.'
-                  : (isRejected
-                      ? 'Check release cage and examine worker agitation.'
-                      : 'Colony is queenright and stable. Continue regular monitoring.'))),
+      queenPresentDetected: queenPresentVal,
+      queenAbsentDetected: queenAbsentVal,
+      queenAcceptedDetected: queenAcceptedVal,
+      queenRejectedDetected: queenRejectedVal,
+      recommendation: computedRec,
       historyDates: data['historyDates'] != null
           ? List<String>.from(data['historyDates'])
           : const [],
