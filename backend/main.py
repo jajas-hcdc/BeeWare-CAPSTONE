@@ -205,10 +205,11 @@ def start_udp_beacon_discovery_listener(port: int = 8001):
 # ======================== FASTAPI LIFESPAN ========================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize SQLite DB, Firebase & UDP Beacon Listener
+    # Startup: Initialize SQLite DB, Firebase, UDP Beacon & 24/7 RTDB Telemetry Watcher
     init_db()
     initialize_firebase()
     start_udp_beacon_discovery_listener(8001)
+    start_firebase_rtdb_telemetry_watcher(interval_seconds=5)
     print("🐝 BeeWare Backend initialized successfully on port 8000.")
     yield
 
@@ -411,7 +412,17 @@ def process_telemetry_background(
     print(f"Battery Level: {battery_level} %")
     print(f"Wi-Fi RSSI:    {wifi_rssi} dBm")
     print(f"Sample Rate:   {sample_rate} Hz")
-    # 4. Trigger Firebase Cloud Messaging (FCM) push notification to mobile phone
+    is_acoustic_not_detected = frequency == 0
+    is_queen_present_by_freq = frequency >= 50 and frequency <= 260
+    is_queen_absent_by_freq = frequency > 320
+
+    cond_label = "No Buzz Detected" if is_acoustic_not_detected else (
+        "Queen Present" if is_queen_present_by_freq else (
+            "Queen Absent" if is_queen_absent_by_freq else "Queen Present"
+        )
+    )
+
+    # 4. Trigger Firebase Cloud Messaging (FCM) push notification to mobile phone if anomaly detected
     send_fcm_telemetry_notification(
         device_id=device_id,
         temp=temp,
@@ -419,6 +430,7 @@ def process_telemetry_background(
         battery=battery_level,
         frequency=frequency,
         filename=Path(audio_file_path).name if audio_file_path else None,
+        queen_status=cond_label,
     )
 
     # 5. Optional Cloud Firestore sync if configured
@@ -426,15 +438,6 @@ def process_telemetry_background(
         fb_client = initialize_firebase()
         if fb_client:
             hive_id = f"hive_{device_id.lower().replace('-', '_')}"
-            is_acoustic_not_detected = frequency == 0
-            is_queen_present_by_freq = frequency >= 50 and frequency <= 260
-            is_queen_absent_by_freq = frequency > 320
-
-            cond_label = "No Buzz Detected" if is_acoustic_not_detected else (
-                "Queen Present" if is_queen_present_by_freq else (
-                    "Queen Absent" if is_queen_absent_by_freq else "Queen Present"
-                )
-            )
             explanation_text = (
                 f"Stable worker humming ({frequency} Hz, 50-260 Hz) combined with standard hive harmonics confirms Queen Present."
                 if is_queen_present_by_freq else (
@@ -471,6 +474,9 @@ def process_telemetry_background(
         pass
 
 
+_last_anomaly_pushed: Dict[str, Dict[str, Any]] = {}
+
+
 def send_fcm_telemetry_notification(
     device_id: str,
     temp: float,
@@ -478,8 +484,9 @@ def send_fcm_telemetry_notification(
     battery: int,
     frequency: int = 0,
     filename: Optional[str] = None,
+    queen_status: Optional[str] = None,
 ):
-    """Sends high-priority lock-screen push notifications to phone via Firebase FCM."""
+    """Sends high-priority lock-screen push notifications to phone via Firebase FCM when an anomaly is detected."""
     if not FIREBASE_AVAILABLE:
         return
 
@@ -497,34 +504,80 @@ def send_fcm_telemetry_notification(
         if frequency == 0:
             missing_sensors.append("Acoustics (0 Hz)")
 
-        # Anomaly & condition detection
-        is_high_temp = temp > 36.5
+        # Acoustic rule: 50 to 260 Hz = Queen Present
+        is_queen_present_freq = (frequency >= 50 and frequency <= 260)
+        is_queen_absent_freq = frequency > 320
+        cond_lower = (queen_status or "").lower()
+        is_queen_absent = (is_queen_absent_freq or "absent" in cond_lower) and not is_queen_present_freq
+        is_queen_rejected = ("rejected" in cond_lower) and not is_queen_present_freq
+
+        is_high_temp = temp > 37.0
         is_low_temp = (temp > 0.0) and (temp < 32.0)
         is_high_hum = hum > 75.0
         is_low_hum = (hum > 0.0) and (hum < 40.0)
-        is_low_battery = (battery > 0) and (battery < 20)
+        is_low_battery = (battery > 0) and (battery < 15)
 
-        if missing_sensors:
-            title = f"⚠️ SENSOR ALERT: {device_id}"
-            body = f"Sensor(s) not detected: {', '.join(missing_sensors)}. Please inspect node wiring and power."
+        anomaly_key = None
+        title = None
+        body = None
+        severity = "Warning"
+
+        if is_queen_absent:
+            anomaly_key = "queen_absent"
+            title = f"🚨 CRITICAL ALERT: {device_id} Queen Absent!"
+            body = f"Elevated frequency ({frequency} Hz) detected! Inspect brood frames for emergency queen cells immediately."
+            severity = "Critical"
+        elif is_queen_rejected:
+            anomaly_key = "queen_rejected"
+            title = f"⚠️ WARNING: {device_id} Queen Rejected"
+            body = f"Worker aggression detected. Check the queen release cage to prevent balling."
+            severity = "Warning"
         elif is_high_temp:
+            anomaly_key = "high_temp"
             title = f"🚨 HIGH TEMP ALERT: {device_id} ({temp:.1f}°C)"
-            body = f"Colony overheating risk detected! Temp is {temp:.1f}°C (Max optimal: 36.0°C). Inspect ventilation and shade."
+            body = f"Brood nest overheating risk! Temp is {temp:.1f}°C (Max optimal: 37.0°C). Inspect ventilation and shade."
+            severity = "Critical"
         elif is_low_temp:
+            anomaly_key = "low_temp"
             title = f"⚠️ LOW TEMP ALERT: {device_id} ({temp:.1f}°C)"
             body = f"Brood nest chilling risk! Temp is {temp:.1f}°C (Min optimal: 32.0°C). Inspect hive insulation and entrance."
+            severity = "Warning"
         elif is_high_hum:
+            anomaly_key = "high_hum"
             title = f"⚠️ HIGH HUMIDITY ALERT: {device_id} ({hum:.0f}%)"
             body = f"Excessive moisture ({hum:.0f}%) detected inside hive! Risk of mold and dampness."
+            severity = "Warning"
         elif is_low_hum:
+            anomaly_key = "low_hum"
             title = f"⚠️ LOW HUMIDITY: {device_id} ({hum:.0f}%)"
             body = f"Dry hive conditions ({hum:.0f}%) detected! Ensure water source is accessible."
+            severity = "Warning"
+        elif missing_sensors:
+            anomaly_key = "missing_sensor"
+            title = f"⚠️ SENSOR ALERT: {device_id}"
+            body = f"Sensor(s) not detected: {', '.join(missing_sensors)}. Please inspect node wiring and power."
+            severity = "Warning"
         elif is_low_battery:
+            anomaly_key = "low_battery"
             title = f"🔋 LOW BATTERY: {device_id} ({battery}%)"
             body = f"IoT hardware node battery is at {battery}%. Please recharge or check solar panel."
+            severity = "Warning"
         else:
-            title = f"🐝 Hive Telemetry: {device_id}"
-            body = f"Brood: {temp:.1f}°C | Hum: {hum:.0f}% | Audio: {frequency} Hz | Battery: {battery}%"
+            # Everything is normal (no anomaly). Clean up previous record and do NOT send notification
+            if device_id in _last_anomaly_pushed:
+                del _last_anomaly_pushed[device_id]
+            return
+
+        now_ts = datetime.datetime.now().timestamp()
+        last = _last_anomaly_pushed.get(device_id, {})
+        last_key = last.get("key")
+        last_time = last.get("time", 0)
+
+        # Rate-limiting: only re-notify if the anomaly changed or 15 mins (900s) passed
+        if last_key == anomaly_key and (now_ts - last_time) < 900:
+            return
+
+        _last_anomaly_pushed[device_id] = {"key": anomaly_key, "time": now_ts}
 
         message = messaging.Message(
             notification=messaging.Notification(
@@ -536,7 +589,9 @@ def send_fcm_telemetry_notification(
                 "hiveId": str(device_id),
                 "temperature": f"{temp:.1f}",
                 "humidity": f"{hum:.0f}",
+                "frequency": str(frequency),
                 "batteryLevel": f"{battery}%",
+                "severity": str(severity),
                 "audioFile": str(filename or ""),
                 "click_action": "FLUTTER_NOTIFICATION_CLICK",
             },
@@ -561,9 +616,60 @@ def send_fcm_telemetry_notification(
         )
 
         response = messaging.send(message)
-        print(f"📲 [FCM PUSH SENT] Notification delivered to 'environment_alerts' (Message ID: {response})")
+        print(f"📲 [FCM PUSH SENT TO PHONE] {title} -> (Message ID: {response})")
     except Exception as exc:
         print(f"📲 [FCM STATUS] Push notification logged: {exc}")
+
+
+# ======================== 24/7 CLOUD RTDB WATCHER ========================
+def start_firebase_rtdb_telemetry_watcher(interval_seconds: int = 5):
+    """
+    24/7 Background Watcher:
+    Continuously monitors Firebase RTDB (/telemetry.json).
+    When ESP32 updates telemetry directly to Firebase Cloud via Starlink / Wi-Fi,
+    this background worker detects any anomaly and pushes an FCM notification to the phone!
+    """
+    def _watcher_loop():
+        import time
+        import urllib.request
+        rtdb_url = "https://beeware-beaef-default-rtdb.asia-southeast1.firebasedatabase.app/telemetry.json"
+        print(f"👁️ [24/7 CLOUD WATCHER] Active. Polling {rtdb_url} every {interval_seconds}s for anomalies...")
+
+        while True:
+            try:
+                req = urllib.request.Request(
+                    rtdb_url,
+                    headers={"User-Agent": "BeeWare-Cloud-Watcher/2.0"}
+                )
+                with urllib.request.urlopen(req, timeout=4.0) as resp:
+                    if resp.status == 200:
+                        raw = resp.read().decode("utf-8")
+                        if raw and raw != "null":
+                            data = json.loads(raw)
+                            if isinstance(data, dict):
+                                for dev_id, dev in data.items():
+                                    if not isinstance(dev, dict):
+                                        continue
+                                    t = float(dev.get("temperature", 0.0) or 0.0)
+                                    h = float(dev.get("humidity", 0.0) or 0.0)
+                                    f = int(dev.get("frequency", dev.get("frequency_hz", 0)) or 0)
+                                    b = int(dev.get("battery_level", 100) or 100)
+                                    cond = str(dev.get("conditionLabel", dev.get("queen_status", "")) or "")
+                                    send_fcm_telemetry_notification(
+                                        device_id=dev_id,
+                                        temp=t,
+                                        hum=h,
+                                        battery=b,
+                                        frequency=f,
+                                        queen_status=cond,
+                                    )
+            except Exception:
+                pass
+
+            time.sleep(interval_seconds)
+
+    t = threading.Thread(target=_watcher_loop, daemon=True, name="BeeWare-24-7-Cloud-Watcher")
+    t.start()
 
 
 # ======================== API ROUTES ========================
