@@ -9,19 +9,33 @@ class AuthService {
 
   AuthService._internal();
 
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  FirebaseAuth? get _auth {
+    try {
+      return FirebaseAuth.instance;
+    } catch (_) {
+      return null;
+    }
+  }
 
-  Stream<User?> authStateChanges() => _auth.authStateChanges();
+  FirebaseFirestore? get _firestore {
+    try {
+      return FirebaseFirestore.instance;
+    } catch (_) {
+      return null;
+    }
+  }
 
-  User? get currentUser => _auth.currentUser;
+  Stream<User?> authStateChanges() => _auth?.authStateChanges() ?? const Stream.empty();
+
+  User? get currentUser => _auth?.currentUser;
 
   bool get isAnonymous => currentUser?.isAnonymous ?? true;
 
   Future<User?> signIn(String email, String password) async {
     try {
+      if (_auth == null) throw Exception('Firebase Auth is not available.');
       // 1. Direct Firebase Auth sign in with timeout
-      final credential = await _auth
+      final credential = await _auth!
           .signInWithEmailAndPassword(
             email: email,
             password: password,
@@ -50,7 +64,8 @@ class AuthService {
 
   Future<User?> signUp(String email, String password, {String? displayName}) async {
     try {
-      final credential = await _auth
+      if (_auth == null) throw Exception('Firebase Auth is not available.');
+      final credential = await _auth!
           .createUserWithEmailAndPassword(
             email: email,
             password: password,
@@ -86,6 +101,7 @@ class AuthService {
   }
 
   void _syncUserBackground(User user, String email, {String? displayName, bool isNew = false}) {
+    if (_firestore == null) return;
     final Map<String, dynamic> data = {
       'email': email,
       'displayName': displayName ?? user.displayName ?? (email.contains('@') ? email.split('@').first : email),
@@ -96,7 +112,7 @@ class AuthService {
       data['role'] = 'beekeeper';
     }
 
-    _firestore
+    _firestore!
         .collection('users')
         .doc(user.uid)
         .set(data, SetOptions(merge: true))
@@ -106,7 +122,8 @@ class AuthService {
   }
 
   Future<void> sendPasswordResetEmail(String email) async {
-    await _auth.sendPasswordResetEmail(email: email).timeout(
+    if (_auth == null) return;
+    await _auth!.sendPasswordResetEmail(email: email).timeout(
       const Duration(seconds: 10),
       onTimeout: () => throw FirebaseAuthException(
         code: 'timeout',
@@ -116,8 +133,8 @@ class AuthService {
   }
 
   Future<void> updatePassword(String newPassword) async {
-    if (_auth.currentUser != null) {
-      await _auth.currentUser!.updatePassword(newPassword).timeout(
+    if (_auth?.currentUser != null) {
+      await _auth!.currentUser!.updatePassword(newPassword).timeout(
         const Duration(seconds: 10),
         onTimeout: () => throw FirebaseAuthException(
           code: 'timeout',
@@ -130,7 +147,7 @@ class AuthService {
   }
 
   Future<void> signOut() async {
-    await _auth.signOut();
+    await _auth?.signOut();
   }
 
   String get displayName {
