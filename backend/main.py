@@ -126,8 +126,18 @@ def initialize_firebase() -> Optional[Any]:
         except Exception:
             return None
 
+    service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
     service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     default_key_path = BASE_DIR / "serviceAccountKey.json"
+
+    if service_account_json:
+        try:
+            cred_dict = json.loads(service_account_json)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            return firestore.client()
+        except Exception as exc:
+            print(f"⚠️ Firebase JSON env initialization failed: {exc}")
 
     cred_path = None
     if service_account_path and os.path.exists(service_account_path):
