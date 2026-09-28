@@ -27,8 +27,8 @@ exports.onEsp32TelemetryUpdate = functions.database
     const queenStatus = data.queen_status || data.conditionLabel || "Queen Present";
     const audioPath = data.audio_file_path || "";
 
-    // A frequency below 250 Hz combined with standard hive harmonics indicates Queen Present
-    const isQueenPresentByAcoustics = freq > 0 && freq <= 250;
+    // A frequency between 50 to 260 Hz combined with standard hive harmonics indicates Queen Present
+    const isQueenPresentByAcoustics = freq >= 50 && freq <= 260;
     const isQueenAbsentByAcoustics = freq > 320;
 
     const isQueenAbsent =
@@ -155,7 +155,7 @@ exports.onEsp32TelemetryUpdate = functions.database
         : "Queen Present";
 
       const explanationText = isQueenPresentByAcoustics
-        ? `Stable worker humming (${freq} Hz < 250 Hz) combined with standard hive harmonics confirms Queen Present.`
+        ? `Stable worker humming (${freq} Hz, 50-260 Hz) combined with standard hive harmonics confirms Queen Present.`
         : isQueenAbsent
         ? `Acoustic frequency (${freq} Hz) indicates Queenless Roar. Urgent frame inspection needed.`
         : isQueenRejected

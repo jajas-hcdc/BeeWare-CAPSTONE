@@ -230,7 +230,7 @@ class HiveData {
         freqVal == 0;
 
     final num? parsedFreq = freqVal is num ? freqVal : num.tryParse(freqVal?.toString() ?? '');
-    final bool isFreqQueenPresent = parsedFreq != null && parsedFreq > 0 && parsedFreq <= 250;
+    final bool isFreqQueenPresent = parsedFreq != null && parsedFreq >= 50 && parsedFreq <= 260;
     final bool isFreqQueenAbsent = parsedFreq != null && parsedFreq > 320;
 
     if (isAcousticZero && (condition == 'Queen Present' || condition.isEmpty)) {
@@ -322,7 +322,7 @@ class HiveData {
                   'The AI analyzed the hive\'s acoustic, temperature, and humidity data and classified the colony state.')
           ? data['explanation']
           : (isFreqQueenPresent
-              ? 'Stable worker humming ($parsedFreq Hz < 250 Hz) combined with standard hive harmonics confirms Queen Present.'
+              ? 'Stable worker humming ($parsedFreq Hz, 50-260 Hz) combined with standard hive harmonics confirms Queen Present.'
               : (isFreqQueenAbsent
                   ? 'Acoustic frequency ($parsedFreq Hz) indicates Queenless Roar. Urgent frame inspection needed.'
                   : (data['explanation'] ??

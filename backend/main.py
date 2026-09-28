@@ -427,7 +427,7 @@ def process_telemetry_background(
         if fb_client:
             hive_id = f"hive_{device_id.lower().replace('-', '_')}"
             is_acoustic_not_detected = frequency == 0
-            is_queen_present_by_freq = frequency > 0 and frequency <= 250
+            is_queen_present_by_freq = frequency >= 50 and frequency <= 260
             is_queen_absent_by_freq = frequency > 320
 
             cond_label = "No Buzz Detected" if is_acoustic_not_detected else (
@@ -436,7 +436,7 @@ def process_telemetry_background(
                 )
             )
             explanation_text = (
-                f"Stable worker humming ({frequency} Hz < 250 Hz) combined with standard hive harmonics confirms Queen Present."
+                f"Stable worker humming ({frequency} Hz, 50-260 Hz) combined with standard hive harmonics confirms Queen Present."
                 if is_queen_present_by_freq else (
                     f"Acoustic frequency ({frequency} Hz) indicates Queenless Roar. Urgent frame inspection needed."
                     if is_queen_absent_by_freq else (

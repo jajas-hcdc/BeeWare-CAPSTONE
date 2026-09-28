@@ -292,8 +292,8 @@ class HiveService extends ChangeNotifier {
       String? condLabel = (latest['conditionLabel'] ?? latest['queen_status']) as String?;
       if (!hasAcoustic && (condLabel == null || condLabel == 'Queen Present' || condLabel == 'Normal')) {
         condLabel = 'No Buzz Detected';
-      } else if (hasAcoustic && freqHz <= 250 && (condLabel == null || condLabel.isEmpty || condLabel == 'Normal')) {
-        // A frequency below 250 Hz combined with standard hive harmonics indicates Queen Present
+      } else if (hasAcoustic && freqHz >= 50 && freqHz <= 260 && (condLabel == null || condLabel.isEmpty || condLabel == 'Normal')) {
+        // A frequency between 50 to 260 Hz combined with standard hive harmonics indicates Queen Present
         condLabel = 'Queen Present';
       }
       final conf = (latest['confidence'] as num?)?.toInt();
@@ -325,8 +325,8 @@ class HiveService extends ChangeNotifier {
         final isAcc = effectiveCond.toLowerCase().contains('accepted');
         final isPres = !isAbs && !isRej && !isAcc && hasAcoustic;
 
-        final String explanationText = (hasAcoustic && freqHz <= 250 && !isAbs && !isRej && !isAcc)
-            ? 'Stable worker humming ($freqHz Hz < 250 Hz) combined with standard hive harmonics confirms Queen Present.'
+        final String explanationText = (hasAcoustic && freqHz >= 50 && freqHz <= 260 && !isAbs && !isRej && !isAcc)
+            ? 'Stable worker humming ($freqHz Hz, 50-260 Hz) combined with standard hive harmonics confirms Queen Present.'
             : (isAbs
                 ? 'Acoustic frequency ($freqHz Hz) indicates Queenless Roar. Urgent frame inspection needed.'
                 : existing.explanation);
@@ -334,7 +334,7 @@ class HiveService extends ChangeNotifier {
         _hives[index] = existing.copyWith(
           conditionLabel: effectiveCond,
           explanation: explanationText,
-          confidence: conf ?? (!hasAcoustic ? 50 : ((hasAcoustic && freqHz <= 250) ? 95 : existing.confidence)),
+          confidence: conf ?? (!hasAcoustic ? 50 : ((hasAcoustic && freqHz >= 50 && freqHz <= 260) ? 95 : existing.confidence)),
           healthScore: effectiveHealth,
           temperature: temp.toStringAsFixed(1),
           humidity: hum.toStringAsFixed(0),

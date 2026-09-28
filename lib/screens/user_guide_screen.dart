@@ -54,7 +54,7 @@ class _UserGuideScreenState extends State<UserGuideScreen> {
       'icon': Icons.psychology_outlined,
       'summary': 'How the acoustic machine learning model classifies queen presence and colony states.',
       'steps': [
-        'Queen Present (🟢): Stable worker humming (~180-250 Hz) and steady brood thermoregulation (34°C - 36°C).',
+        'Queen Present (🟢): Stable worker humming (50-260 Hz) and steady brood thermoregulation (34°C - 36°C).',
         'Queen Absent (🔴): Agitated piping/fanning frequencies (>300 Hz) with fluctuating cluster temperature. Immediate physical inspection recommended.',
         'Queen Accepted (🔵): Colony has successfully integrated a newly introduced mated queen.',
         'Queen Rejected (🟠): Workers are balling or rejecting an introduced queen cage. Remove cage and re-evaluate.',
