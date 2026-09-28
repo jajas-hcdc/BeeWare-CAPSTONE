@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import '../models/audio_recording_model.dart';
 import '../models/hive_data.dart';
 import '../services/audio_service.dart';
 import '../services/export_service.dart';
@@ -211,6 +212,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
         // 5. Recent Hive Audio Recordings (Last 5)
         _buildAudioRecordingsCard(),
+        const SizedBox(height: 24),
       ],
     );
   }
@@ -289,7 +291,10 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
     final temps = rawTemps.length == 1 ? [rawTemps[0], rawTemps[0]] : rawTemps;
     final chartDates = dates.length == 1 ? [dates[0], dates[0]] : dates;
-    final avgTemp = (rawTemps.reduce((a, b) => a + b) / rawTemps.length).toStringAsFixed(1);
+    final validTemps = rawTemps.where((t) => t > 0.0).toList();
+    final avgTemp = validTemps.isNotEmpty
+        ? (validTemps.reduce((a, b) => a + b) / validTemps.length).toStringAsFixed(1)
+        : (rawTemps.isNotEmpty ? rawTemps.last.toStringAsFixed(1) : '34.0');
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -329,7 +334,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
               Container(
                 width: 10,
                 height: 10,
-                decoration: const BoxDecoration(color: Color(0x334CAF50), shape: BoxShape.circle),
+                decoration: const BoxDecoration(color: Color(0xFF4CAF50), shape: BoxShape.circle),
               ),
               const SizedBox(width: 4),
               const Text(
@@ -342,28 +347,23 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
           _buildScrollableChart(
             dataLength: chartDates.length,
-            height: 160,
-            chart: LineChart(
-              LineChartData(
-                minY: 28,
-                maxY: 38,
+            height: 150,
+            chart: BarChart(
+              BarChartData(
+                maxY: 45,
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
-                  horizontalInterval: 2,
-                  getDrawingHorizontalLine: (value) {
-                    if (value == 32 || value == 36) {
-                      return FlLine(color: const Color(0x334CAF50), strokeWidth: 1.5, dashArray: [4, 4]);
-                    }
-                    return FlLine(color: Colors.black.withAlpha(20), strokeWidth: 1);
-                  },
+                  horizontalInterval: 10,
+                  getDrawingHorizontalLine: (value) =>
+                      FlLine(color: Colors.black.withAlpha(20), strokeWidth: 1),
                 ),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      interval: 2,
-                      reservedSize: 30,
+                      interval: 10,
+                      reservedSize: 28,
                       getTitlesWidget: (val, meta) => Text(
                         '${val.toInt()}°',
                         style: const TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w600),
@@ -394,39 +394,28 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 ),
                 borderData: FlBorderData(show: false),
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: List.generate(temps.length, (i) => FlSpot(i.toDouble(), temps[i])),
-                    isCurved: temps.length > 2,
-                    curveSmoothness: 0.35,
-                    color: const Color(0xFFE65100),
-                    barWidth: 3,
-                    isStrokeCapRound: true,
-                    dotData: FlDotData(
-                      show: true,
-                      getDotPainter: (spot, percent, barData, index) {
-                        final isAlert = spot.y < 31.0 || spot.y > 36.5;
-                        return FlDotCirclePainter(
-                          radius: 4,
-                          color: isAlert ? Colors.red : const Color(0xFFE65100),
-                          strokeWidth: 2,
-                          strokeColor: Colors.white,
-                        );
-                      },
-                    ),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      gradient: LinearGradient(
-                        colors: [
-                          const Color(0xFFE65100).withAlpha(80),
-                          const Color(0xFFE65100).withAlpha(0),
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                barGroups: List.generate(temps.length, (i) {
+                  final t = temps[i];
+                  final isOptimal = t >= 32.0 && t <= 36.0;
+                  final isHot = t > 36.0;
+                  final barColor = isOptimal
+                      ? AppColors.healthyGreen
+                      : (isHot ? const Color(0xFFE65100) : const Color(0xFFFFB300));
+                  return BarChartGroupData(
+                    x: i,
+                    barRods: [
+                      BarChartRodData(
+                        toY: t < 0.0 ? 0.0 : t,
+                        color: t <= 0.0 ? Colors.grey.shade400 : barColor,
+                        width: 14,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(4),
+                          topRight: Radius.circular(4),
+                        ),
                       ),
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                }),
               ),
             ),
           ),
@@ -470,7 +459,10 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
     final hums = rawHums.length == 1 ? [rawHums[0], rawHums[0]] : rawHums;
     final chartDates = dates.length == 1 ? [dates[0], dates[0]] : dates;
-    final avgHum = (rawHums.reduce((a, b) => a + b) / rawHums.length).toStringAsFixed(0);
+    final validHums = rawHums.where((h) => h > 0.0).toList();
+    final avgHum = validHums.isNotEmpty
+        ? (validHums.reduce((a, b) => a + b) / validHums.length).toStringAsFixed(0)
+        : (rawHums.isNotEmpty ? rawHums.last.toStringAsFixed(0) : '60');
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -504,19 +496,33 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
               ),
             ],
           ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: const BoxDecoration(color: Color(0xFF0288D1), shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 4),
+              const Text(
+                'Optimal Hive Humidity Zone (50% - 80%)',
+                style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
           const SizedBox(height: 14),
 
           _buildScrollableChart(
             dataLength: chartDates.length,
             height: 150,
-            chart: LineChart(
-              LineChartData(
-                minY: 40,
-                maxY: 80,
+            chart: BarChart(
+              BarChartData(
+                maxY: 100,
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
-                  horizontalInterval: 10,
+                  horizontalInterval: 25,
                   getDrawingHorizontalLine: (value) =>
                       FlLine(color: Colors.black.withAlpha(20), strokeWidth: 1),
                 ),
@@ -524,8 +530,8 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      interval: 10,
-                      reservedSize: 30,
+                      interval: 25,
+                      reservedSize: 32,
                       getTitlesWidget: (val, meta) => Text(
                         '${val.toInt()}%',
                         style: const TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w600),
@@ -556,28 +562,27 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 ),
                 borderData: FlBorderData(show: false),
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: List.generate(hums.length, (i) => FlSpot(i.toDouble(), hums[i])),
-                    isCurved: hums.length > 2,
-                    curveSmoothness: 0.35,
-                    color: const Color(0xFF0288D1),
-                    barWidth: 3,
-                    isStrokeCapRound: true,
-                    dotData: const FlDotData(show: false),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      gradient: LinearGradient(
-                        colors: [
-                          const Color(0xFF0288D1).withAlpha(100),
-                          const Color(0xFF0288D1).withAlpha(10),
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                barGroups: List.generate(hums.length, (i) {
+                  final h = hums[i];
+                  final isOptimal = h >= 50.0 && h <= 80.0;
+                  final barColor = isOptimal
+                      ? const Color(0xFF0288D1)
+                      : (h > 80.0 ? const Color(0xFF01579B) : const Color(0xFFFFB300));
+                  return BarChartGroupData(
+                    x: i,
+                    barRods: [
+                      BarChartRodData(
+                        toY: h < 0.0 ? 0.0 : h,
+                        color: h <= 0.0 ? Colors.grey.shade400 : barColor,
+                        width: 14,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(4),
+                          topRight: Radius.circular(4),
+                        ),
                       ),
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                }),
               ),
             ),
           ),
@@ -952,7 +957,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
                                     Text(
-                                      'Clip #${index + 1} • ${clip.timestamp}',
+                                      'Clip #${index + 1} • ${_getClipDisplayTimestamp(index, clip)}',
                                       style: const TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.w800,
@@ -1017,5 +1022,25 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
         );
       },
     );
+  }
+
+  String _getClipDisplayTimestamp(int index, AudioRecordingModel clip) {
+    // If valid Unix epoch timestamp (after 2023)
+    if (clip.createdAt > 1700000000000) {
+      final diffMs = DateTime.now().millisecondsSinceEpoch - clip.createdAt;
+      if (diffMs >= 0) {
+        final diffMin = diffMs ~/ 60000;
+        if (diffMin < 2) return 'Just now';
+        if (diffMin < 60) {
+          final rounded = (diffMin / 5).round() * 5;
+          return rounded <= 0 ? 'Just now' : '$rounded mins ago';
+        }
+        final hours = diffMin ~/ 60;
+        if (hours < 24) return '$hours hr${hours > 1 ? "s" : ""} ago';
+      }
+    }
+    // Relative progressive timestamp: index 0 is "Just now", then 5 mins ago, 10 mins ago, 15, 20
+    if (index == 0) return 'Just now';
+    return '${index * 5} mins ago';
   }
 }

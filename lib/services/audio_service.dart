@@ -121,8 +121,15 @@ class AudioService extends ChangeNotifier {
           });
         }
 
-        // Sort descending: newest recording first
-        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        // Sort descending: newest recording first (by epoch timestamp or slot index)
+        list.sort((a, b) {
+          if (b.createdAt > 1700000000000 && a.createdAt > 1700000000000) {
+            return b.createdAt.compareTo(a.createdAt);
+          }
+          final cmp = b.createdAt.compareTo(a.createdAt);
+          if (cmp != 0) return cmp;
+          return b.slot.compareTo(a.slot);
+        });
 
         final trimmed = list.take(5).toList();
         _recordingsCache[cleanId] = trimmed;

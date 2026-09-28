@@ -189,6 +189,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
               ),
             ),
           content,
+          const SizedBox(height: 80),
         ],
       ),
     );
