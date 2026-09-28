@@ -643,6 +643,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           );
                         },
+                        onDismiss: () {
+                          AlertService().dismissAlert(alert.id);
+                        },
                       ),
                     );
                   }).toList(),
@@ -758,43 +761,62 @@ class _HomeScreenState extends State<HomeScreen> {
     required String timeText,
     required bool isCritical,
     required VoidCallback onTap,
+    VoidCallback? onDismiss,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 10.0),
-        decoration: AppStyles.cardDecoration(borderRadius: BorderRadius.circular(12)),
-        child: Row(
-          children: [
-            Icon(
-              Icons.warning_amber_rounded,
-              color: isCritical ? Colors.red : const Color(0xFFFFB300),
-              size: 24,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: RichText(
-                text: TextSpan(
-                  style: const TextStyle(color: Colors.black, fontSize: 12),
-                  children: [
-                    TextSpan(
-                      text: '$hiveName  ',
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                    TextSpan(
-                      text: alertText,
-                      style: const TextStyle(fontWeight: FontWeight.w500),
-                    ),
-                  ],
+    return Container(
+      decoration: AppStyles.cardDecoration(borderRadius: BorderRadius.circular(12)),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 10.0),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.warning_amber_rounded,
+                  color: isCritical ? Colors.red : const Color(0xFFFFB300),
+                  size: 24,
                 ),
-                overflow: TextOverflow.ellipsis,
-              ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: RichText(
+                    text: TextSpan(
+                      style: const TextStyle(color: Colors.black, fontSize: 12),
+                      children: [
+                        TextSpan(
+                          text: '$hiveName  ',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                        TextSpan(
+                          text: alertText,
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                      ],
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  timeText,
+                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+                ),
+                if (onDismiss != null) ...[
+                  const SizedBox(width: 6),
+                  InkWell(
+                    onTap: onDismiss,
+                    borderRadius: BorderRadius.circular(12),
+                    child: const Padding(
+                      padding: EdgeInsets.all(4.0),
+                      child: Icon(Icons.close, size: 16, color: Colors.black45),
+                    ),
+                  ),
+                ],
+              ],
             ),
-            Text(
-              timeText,
-              style: const TextStyle(fontSize: 11, color: Colors.black54),
-            ),
-          ],
+          ),
         ),
       ),
     );

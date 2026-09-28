@@ -383,12 +383,12 @@ class HiveService extends ChangeNotifier {
           humidity: hum.toStringAsFixed(0),
           acoustic: acousticStr,
           acousticStatus: acousticStatusStr,
-          isAlert: !hasAcoustic || isAbs || isRej || existing.isAlert,
-          alertSeverity: !hasAcoustic ? 'Critical' : (isAbs ? 'Critical' : (isRej ? 'Warning' : existing.alertSeverity)),
-          alertLabel: !hasAcoustic ? '⚠️ Acoustic Signal Not Detected (0 Hz)' : (isAbs ? 'Queen Absent' : (isRej ? 'Queen Rejected' : existing.alertLabel)),
+          isAlert: !hasAcoustic || isAbs || isRej,
+          alertSeverity: !hasAcoustic ? 'Critical' : (isAbs ? 'Critical' : (isRej ? 'Warning' : 'Info')),
+          alertLabel: !hasAcoustic ? '⚠️ Acoustic Signal Not Detected (0 Hz)' : (isAbs ? 'Queen Absent' : (isRej ? 'Queen Rejected' : 'Queen Present')),
           alertMessage: !hasAcoustic
               ? 'Acoustic microphone on ${existing.name} is detecting 0 Hz (silent or disconnected).'
-              : (isAbs ? 'Colony is Queenless.' : (isRej ? 'Colony rejecting queen.' : existing.alertMessage)),
+              : (isAbs ? 'Colony is Queenless.' : (isRej ? 'Colony rejecting queen.' : 'Colony is queenright and stable.')),
           queenPresentDetected: hasAcoustic && isPres,
           queenAbsentDetected: hasAcoustic && isAbs,
           queenAcceptedDetected: hasAcoustic && isAcc,

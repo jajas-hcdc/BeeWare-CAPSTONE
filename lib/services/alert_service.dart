@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/alert_model.dart';
+import '../models/hive_data.dart';
 import 'backend_service.dart';
 import 'firebase_service.dart';
 import 'hive_service.dart';
@@ -32,12 +33,31 @@ class AlertService extends ChangeNotifier {
     return _alerts.take(4).toList();
   }
 
+  final Set<String> _dismissedAlertIds = {};
+
+  void dismissAlert(String id) {
+    _dismissedAlertIds.add(id);
+    _alerts.removeWhere((a) => a.id == id);
+    _saveToCache();
+    notifyListeners();
+  }
+
+  void clearAllAlerts() {
+    for (final a in _alerts) {
+      _dismissedAlertIds.add(a.id);
+    }
+    _alerts.clear();
+    _saveToCache();
+    notifyListeners();
+  }
+
   Future<void> _saveToCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final jsonList = _alerts.map((a) => a.toJson()).toList();
       final encoded = jsonEncode(jsonList);
       await prefs.setString('beeware_cached_alerts', encoded);
+      await prefs.setStringList('beeware_dismissed_alerts', _dismissedAlertIds.toList());
     } catch (e) {
       debugPrint('Error saving alerts cache: $e');
     }
@@ -46,11 +66,16 @@ class AlertService extends ChangeNotifier {
   Future<void> _loadFromCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final dismissed = prefs.getStringList('beeware_dismissed_alerts');
+      if (dismissed != null) {
+        _dismissedAlertIds.addAll(dismissed);
+      }
       final raw = prefs.getString('beeware_cached_alerts');
       if (raw != null && raw.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(raw);
         final cached = decoded
             .map((item) => AlertModel.fromJson(Map<String, dynamic>.from(item as Map)))
+            .where((a) => !_dismissedAlertIds.contains(a.id))
             .toList();
         if (cached.isNotEmpty) {
           _alerts = cached;
@@ -93,12 +118,63 @@ class AlertService extends ChangeNotifier {
   void _computeAlerts({List<Map<String, dynamic>>? rawFirestoreAlerts}) {
     final List<AlertModel> result = [];
     final Set<String> seenIds = {};
+    final hives = HiveService().hives;
+
+    // Helper: checks if an alert has already been resolved by real-time recovery of the hive
+    bool isAlertResolved(AlertModel alert) {
+      if (_dismissedAlertIds.contains(alert.id)) return true;
+
+      HiveData? matchingHive;
+      for (final h in hives) {
+        if (h.name.toLowerCase() == alert.hiveId.toLowerCase() ||
+            h.deviceId.toLowerCase() == alert.hiveId.toLowerCase() ||
+            h.id.toLowerCase() == alert.hiveId.toLowerCase() ||
+            alert.message.toLowerCase().contains(h.name.toLowerCase()) ||
+            alert.message.toLowerCase().contains(h.deviceId.toLowerCase())) {
+          matchingHive = h;
+          break;
+        }
+      }
+
+      if (matchingHive != null) {
+        final bool hiveHasAcoustic = matchingHive.acoustic != '0 Hz' &&
+            !matchingHive.acoustic.startsWith('0') &&
+            !matchingHive.acousticStatus.toLowerCase().contains('not detected');
+
+        final bool isAcousticZeroAlert = alert.title.toLowerCase().contains('0 hz') ||
+            alert.title.toLowerCase().contains('acoustic') ||
+            alert.message.toLowerCase().contains('0 hz');
+
+        // If the hive is now detecting acoustics, any 0 Hz acoustic alert is resolved
+        if (isAcousticZeroAlert && hiveHasAcoustic) {
+          return true;
+        }
+
+        final tempVal = double.tryParse(matchingHive.temperature.replaceAll('°C', '').trim()) ?? 0.0;
+        if (alert.title.toLowerCase().contains('temperature') && tempVal > 0) {
+          return true;
+        }
+
+        final humVal = double.tryParse(matchingHive.humidity.replaceAll('%', '').trim()) ?? 0.0;
+        if (alert.title.toLowerCase().contains('humidity') && humVal > 0) {
+          return true;
+        }
+
+        if ((alert.title.toLowerCase().contains('absent') || alert.title.toLowerCase().contains('rejected')) &&
+            matchingHive.conditionLabel == 'Queen Present' &&
+            hiveHasAcoustic) {
+          return true;
+        }
+      }
+
+      return false;
+    }
 
     // 1. Process Firestore stream alerts if available
     if (rawFirestoreAlerts != null && rawFirestoreAlerts.isNotEmpty) {
       for (final map in rawFirestoreAlerts) {
         final alert = AlertModel.fromMap(map, map['id']);
-        if (!seenIds.contains(alert.id)) {
+        if (!seenIds.contains(alert.id) && !isAlertResolved(alert)) {
           seenIds.add(alert.id);
           result.add(alert);
         }
@@ -106,7 +182,6 @@ class AlertService extends ChangeNotifier {
     }
 
     // 2. Derive alerts from live HiveData in HiveService
-    final hives = HiveService().hives;
     for (final h in hives) {
       // Missing sensor diagnostics (temp <= 0.0, hum <= 0.0, acoustic 0 Hz)
       final tempVal = double.tryParse(h.temperature.replaceAll('°C', '').trim());
@@ -123,7 +198,7 @@ class AlertService extends ChangeNotifier {
 
       if (isTempNotDetected) {
         final alertId = 'sensor_temp_not_detected_${h.id}';
-        if (!seenIds.contains(alertId)) {
+        if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
           seenIds.add(alertId);
           result.add(
             AlertModel(
@@ -143,7 +218,7 @@ class AlertService extends ChangeNotifier {
 
       if (isHumNotDetected) {
         final alertId = 'sensor_hum_not_detected_${h.id}';
-        if (!seenIds.contains(alertId)) {
+        if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
           seenIds.add(alertId);
           result.add(
             AlertModel(
@@ -163,7 +238,7 @@ class AlertService extends ChangeNotifier {
 
       if (isAcousticNotDetected) {
         final alertId = 'sensor_acoustic_not_detected_${h.id}';
-        if (!seenIds.contains(alertId)) {
+        if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
           seenIds.add(alertId);
           final alert = AlertModel(
             id: alertId,
@@ -181,13 +256,13 @@ class AlertService extends ChangeNotifier {
         }
       }
 
-      if (h.isAlert ||
-          h.alertSeverity.toLowerCase() == 'critical' ||
-          h.alertSeverity.toLowerCase() == 'warning' ||
-          h.queenAbsentDetected ||
-          h.queenRejectedDetected) {
+      if (h.isAlert &&
+          (h.alertSeverity.toLowerCase() == 'critical' ||
+              h.alertSeverity.toLowerCase() == 'warning' ||
+              h.queenAbsentDetected ||
+              h.queenRejectedDetected)) {
         final alertId = 'hive_alert_${h.id}';
-        if (!seenIds.contains(alertId)) {
+        if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
           seenIds.add(alertId);
           final alert = AlertModel(
             id: alertId,

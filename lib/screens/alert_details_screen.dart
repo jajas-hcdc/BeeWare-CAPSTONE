@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/hive_data.dart';
 import '../models/alert_model.dart';
+import '../services/alert_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_app_bar.dart';
 
@@ -91,6 +92,30 @@ class AlertDetailsScreen extends StatelessWidget {
                   const Divider(color: Colors.black12, height: 1),
                   _specRow('Recommendation', alert.recommendation, isLast: true),
                 ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () {
+                AlertService().dismissAlert(alert.id);
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Alert dismissed.'),
+                    duration: Duration(seconds: 2),
+                    backgroundColor: Colors.black87,
+                  ),
+                );
+              },
+              icon: const Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
+              label: const Text(
+                'Mark as Resolved / Dismiss',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.black87,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
             ),
           ],
