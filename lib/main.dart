@@ -18,6 +18,7 @@ import 'screens/login_screen.dart';
 import 'screens/offline_screen.dart';
 import 'theme/app_theme.dart';
 
+@pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await FirebaseService.initialize();
   debugPrint('FCM background message received: ${message.messageId}');
@@ -133,6 +134,7 @@ class _MainNavigationState extends State<MainNavigation> {
     // 0. In-app live sensor & acoustic anomaly notification banner
     _alertSub = AlertService().onAlertTriggered.listen((alert) {
       if (!mounted) return;
+      if (!AlertService().alertsEnabled) return;
       ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
       ScaffoldMessenger.of(context).showMaterialBanner(
         MaterialBanner(
@@ -184,6 +186,7 @@ class _MainNavigationState extends State<MainNavigation> {
     // 1. Foreground in-app notification banner
     _msgSub = FirebaseService().onMessageStream.listen((message) {
       if (!mounted) return;
+      if (!AlertService().pushEnabled) return;
       final notification = message.notification;
       final data = message.data;
       final hiveId = data['hiveId'] as String?;
@@ -191,6 +194,7 @@ class _MainNavigationState extends State<MainNavigation> {
 
       final title = notification?.title ?? (queenStatus != null ? '⚠️ $queenStatus Detected!' : 'Hive Alert');
       final body = notification?.body ?? 'New sensor telemetry event recorded.';
+      debugPrint('📥 [FCM Foreground Alert] $title: $body');
 
       ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
       ScaffoldMessenger.of(context).showMaterialBanner(

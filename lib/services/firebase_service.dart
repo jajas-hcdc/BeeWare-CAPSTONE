@@ -76,6 +76,10 @@ class FirebaseService {
           sound: true,
         );
         await subscribeToAlertTopic();
+        final token = await msg.getToken();
+        debugPrint('📱 [BeeWare FCM] Registration Token: $token');
+      } else {
+        debugPrint('📱 [BeeWare FCM] Permission status: ${settings.authorizationStatus}');
       }
     } catch (e) {
       debugPrint('FCM initialization failed: $e');
@@ -89,6 +93,16 @@ class FirebaseService {
       await msg.subscribeToTopic('environment_alerts');
     } catch (e) {
       debugPrint('Topic subscription failed: $e');
+    }
+  }
+
+  Future<void> unsubscribeFromAlertTopic() async {
+    try {
+      final msg = _messaging;
+      if (msg == null) return;
+      await msg.unsubscribeFromTopic('environment_alerts');
+    } catch (e) {
+      debugPrint('Topic unsubscription failed: $e');
     }
   }
 

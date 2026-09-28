@@ -24,6 +24,69 @@ class AlertService extends ChangeNotifier {
   final StreamController<AlertModel> _alertNotificationController =
       StreamController<AlertModel>.broadcast();
 
+  bool _pushEnabled = true;
+  bool _alertsEnabled = true;
+
+  bool get pushEnabled => _pushEnabled;
+  bool get alertsEnabled => _alertsEnabled;
+
+  Future<void> setPushEnabled(bool value) async {
+    _pushEnabled = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('beeware_push_notifications_enabled', value);
+      if (value) {
+        await FirebaseService().subscribeToAlertTopic();
+      } else {
+        await FirebaseService().unsubscribeFromAlertTopic();
+      }
+    } catch (e) {
+      debugPrint('Error updating push setting: $e');
+    }
+  }
+
+  Future<void> setAlertsEnabled(bool value) async {
+    _alertsEnabled = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('beeware_alert_notifications_enabled', value);
+    } catch (e) {
+      debugPrint('Error updating alerts setting: $e');
+    }
+  }
+
+  Future<void> triggerTestAlert() async {
+    final testAlert = AlertModel(
+      id: 'test_alert_${DateTime.now().millisecondsSinceEpoch}',
+      hiveId: 'Hive 1',
+      queenStatus: 'Queen Present',
+      title: '🐝 BeeWare Alert System Verified',
+      message: 'All sensor diagnostics and telemetry notifications are active.',
+      severity: 'Info',
+      timestamp: DateTime.now(),
+      recommendation: 'Hive telemetry streams and audio sensors are operating nominally.',
+      detectedBy: 'BeeWare Notification Diagnostic Engine',
+    );
+
+    _alertNotificationController.add(testAlert);
+
+    // Also dispatch to backend to trigger real FCM push
+    try {
+      await BackendService().sendAlert(
+        hiveId: testAlert.hiveId,
+        queenStatus: testAlert.queenStatus,
+        title: testAlert.title,
+        message: testAlert.message,
+        severity: testAlert.severity,
+        recommendation: testAlert.recommendation,
+      );
+    } catch (e) {
+      debugPrint('Test alert cloud push skipped: $e');
+    }
+  }
+
   Stream<AlertModel> get onAlertTriggered => _alertNotificationController.stream;
 
   List<AlertModel> get alerts => List.unmodifiable(_alerts);
@@ -66,6 +129,8 @@ class AlertService extends ChangeNotifier {
   Future<void> _loadFromCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      _pushEnabled = prefs.getBool('beeware_push_notifications_enabled') ?? true;
+      _alertsEnabled = prefs.getBool('beeware_alert_notifications_enabled') ?? true;
       final dismissed = prefs.getStringList('beeware_dismissed_alerts');
       if (dismissed != null) {
         _dismissedAlertIds.addAll(dismissed);
@@ -303,22 +368,25 @@ class AlertService extends ChangeNotifier {
   }
 
   void _dispatchNotificationIfNew(AlertModel alert) {
+    if (!_alertsEnabled) return;
     if (!_dispatchedNotificationIds.contains(alert.id)) {
       _dispatchedNotificationIds.add(alert.id);
       _alertNotificationController.add(alert);
 
       // Also sync to cloud Realtime Database for push/remote notifications
-      try {
-        BackendService().sendAlert(
-          hiveId: alert.hiveId,
-          queenStatus: alert.queenStatus,
-          title: alert.title,
-          message: alert.message,
-          severity: alert.severity,
-          recommendation: alert.recommendation,
-        );
-      } catch (e) {
-        debugPrint('Cloud alert dispatch skipped: $e');
+      if (_pushEnabled) {
+        try {
+          BackendService().sendAlert(
+            hiveId: alert.hiveId,
+            queenStatus: alert.queenStatus,
+            title: alert.title,
+            message: alert.message,
+            severity: alert.severity,
+            recommendation: alert.recommendation,
+          );
+        } catch (e) {
+          debugPrint('Cloud alert dispatch skipped: $e');
+        }
       }
     }
   }

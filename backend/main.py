@@ -692,6 +692,46 @@ async def send_alert_notification(
     title = request.title or f"Hive {request.hive_id} - {request.queen_status}"
     message_body = request.message or f"AI detected: {request.queen_status}."
 
+    fcm_id = None
+    if FIREBASE_AVAILABLE:
+        try:
+            initialize_firebase()
+            if firebase_admin._apps:
+                msg = messaging.Message(
+                    notification=messaging.Notification(
+                        title=title,
+                        body=message_body,
+                    ),
+                    data={
+                        "hiveId": str(request.hive_id),
+                        "queenStatus": str(request.queen_status),
+                        "severity": str(severity),
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK",
+                    },
+                    topic="environment_alerts",
+                    android=messaging.AndroidConfig(
+                        priority="high",
+                        notification=messaging.AndroidNotification(
+                            channel_id="beeware_urgent_alerts",
+                            priority="high",
+                            default_sound=True,
+                            default_vibrate_timings=True,
+                        ),
+                    ),
+                    apns=messaging.APNSConfig(
+                        payload=messaging.APNSPayload(
+                            aps=messaging.Aps(
+                                sound="default",
+                                badge=1,
+                            )
+                        )
+                    ),
+                )
+                fcm_id = messaging.send(msg)
+                print(f"📲 [FCM ALERT PUSH SENT] {title} -> {fcm_id}")
+        except Exception as exc:
+            print(f"⚠️ [FCM ALERT PUSH FAILED]: {exc}")
+
     return {
         "success": True,
         "hiveId": request.hive_id,
@@ -699,6 +739,7 @@ async def send_alert_notification(
         "severity": severity,
         "title": title,
         "message": message_body,
+        "fcmMessageId": fcm_id,
     }
 
 
