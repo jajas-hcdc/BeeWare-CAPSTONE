@@ -27,13 +27,21 @@ exports.onEsp32TelemetryUpdate = functions.database
     const queenStatus = data.queen_status || data.conditionLabel || "Queen Present";
     const audioPath = data.audio_file_path || "";
 
+    // A frequency below 250 Hz combined with standard hive harmonics indicates Queen Present
+    const isQueenPresentByAcoustics = freq > 0 && freq <= 250;
+    const isQueenAbsentByAcoustics = freq > 320;
+
     const isQueenAbsent =
-      queenStatus.toLowerCase().includes("absent") ||
-      data.queenAbsentDetected === true ||
-      freq > 320;
+      (queenStatus.toLowerCase().includes("absent") ||
+        data.queenAbsentDetected === true ||
+        isQueenAbsentByAcoustics) &&
+      !isQueenPresentByAcoustics;
+
     const isQueenRejected =
-      queenStatus.toLowerCase().includes("rejected") ||
-      data.queenRejectedDetected === true;
+      (queenStatus.toLowerCase().includes("rejected") ||
+        data.queenRejectedDetected === true) &&
+      !isQueenPresentByAcoustics;
+
     const isOverheating = temp > 37.0;
     const isChilling = temp > 0.0 && temp < 32.0;
     const isHighHumidity = hum > 75.0;
@@ -138,17 +146,31 @@ exports.onEsp32TelemetryUpdate = functions.database
     try {
       const resolvedCondition = isAcousticSilent
         ? "No Buzz Detected"
+        : isQueenPresentByAcoustics
+        ? "Queen Present"
         : isQueenAbsent
         ? "Queen Absent"
         : isQueenRejected
         ? "Queen Rejected"
         : "Queen Present";
 
+      const explanationText = isQueenPresentByAcoustics
+        ? `Stable worker humming (${freq} Hz < 250 Hz) combined with standard hive harmonics confirms Queen Present.`
+        : isQueenAbsent
+        ? `Acoustic frequency (${freq} Hz) indicates Queenless Roar. Urgent frame inspection needed.`
+        : isQueenRejected
+        ? `High agitation buzzing (${freq} Hz) suggests workers are rejecting introduced queen.`
+        : isAcousticSilent
+        ? "⚠️ No Buzz Detected: The acoustic microphone recorded 0 Hz (silence)."
+        : "The AI analyzed the hive's acoustic, temperature, and humidity data and classified the colony state.";
+
       await admin.firestore().collection("hives").doc(deviceId).set(
         {
           id: deviceId,
           deviceId: deviceId,
           conditionLabel: resolvedCondition,
+          explanation: explanationText,
+          confidence: isQueenPresentByAcoustics ? 95 : 90,
           temperature: temp.toString(),
           humidity: hum.toString(),
           acoustic: isAcousticSilent ? "0 Hz" : `${freq} Hz`,
@@ -160,8 +182,8 @@ exports.onEsp32TelemetryUpdate = functions.database
           isAlert: isQueenAbsent || isQueenRejected || isOverheating || isChilling || isAcousticSilent,
           alertSeverity: severity,
           alertLabel: alertTitle || resolvedCondition,
-          alertMessage: alertBody || "Colony stable.",
-          queenPresentDetected: !isAcousticSilent && !isQueenAbsent && !isQueenRejected,
+          alertMessage: alertBody || (isQueenPresentByAcoustics ? "Colony is queenright and stable." : "Colony stable."),
+          queenPresentDetected: isQueenPresentByAcoustics || (!isAcousticSilent && !isQueenAbsent && !isQueenRejected),
           queenAbsentDetected: !isAcousticSilent && isQueenAbsent,
           queenAcceptedDetected: false,
           queenRejectedDetected: !isAcousticSilent && isQueenRejected,

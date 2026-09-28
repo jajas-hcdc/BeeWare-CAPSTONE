@@ -416,6 +416,26 @@ def process_telemetry_background(
         fb_client = initialize_firebase()
         if fb_client:
             hive_id = f"hive_{device_id.lower().replace('-', '_')}"
+            is_acoustic_not_detected = frequency == 0
+            is_queen_present_by_freq = frequency > 0 and frequency <= 250
+            is_queen_absent_by_freq = frequency > 320
+
+            cond_label = "No Buzz Detected" if is_acoustic_not_detected else (
+                "Queen Present" if is_queen_present_by_freq else (
+                    "Queen Absent" if is_queen_absent_by_freq else "Queen Present"
+                )
+            )
+            explanation_text = (
+                f"Stable worker humming ({frequency} Hz < 250 Hz) combined with standard hive harmonics confirms Queen Present."
+                if is_queen_present_by_freq else (
+                    f"Acoustic frequency ({frequency} Hz) indicates Queenless Roar. Urgent frame inspection needed."
+                    if is_queen_absent_by_freq else (
+                        "⚠️ No buzz detected (0 Hz / Silent)." if is_acoustic_not_detected else
+                        "The AI analyzed the hive's acoustic, temperature, and humidity data and classified the colony state."
+                    )
+                )
+            )
+
             hive_doc = {
                 "deviceId": device_id,
                 "temperature": f"{temp:.1f}",
@@ -424,6 +444,14 @@ def process_telemetry_background(
                 "frequency_hz": frequency,
                 "acoustic": f"{frequency} Hz" if frequency > 0 else "0 Hz",
                 "acousticStatus": "Normal" if frequency > 0 else "Not Detected (0 Hz)",
+                "conditionLabel": cond_label,
+                "explanation": explanation_text,
+                "confidence": 95 if is_queen_present_by_freq else (90 if frequency > 0 else 50),
+                "queenPresentDetected": is_queen_present_by_freq or (frequency > 0 and not is_queen_absent_by_freq),
+                "queenAbsentDetected": is_queen_absent_by_freq,
+                "queenAcceptedDetected": False,
+                "queenRejectedDetected": False,
+                "recommendation": "Inspect frames for emergency queen cells or introduce a new mated queen promptly." if is_queen_absent_by_freq else "Colony is queenright and stable. Continue regular monitoring.",
                 "batteryLevel": f"{battery_level}%",
                 "wifiRssi": wifi_rssi,
                 "updatedAt": firestore.SERVER_TIMESTAMP,

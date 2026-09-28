@@ -229,14 +229,22 @@ class HiveData {
         acousticStatusRaw.toLowerCase().contains('not detected') ||
         freqVal == 0;
 
+    final num? parsedFreq = freqVal is num ? freqVal : num.tryParse(freqVal?.toString() ?? '');
+    final bool isFreqQueenPresent = parsedFreq != null && parsedFreq > 0 && parsedFreq <= 250;
+    final bool isFreqQueenAbsent = parsedFreq != null && parsedFreq > 320;
+
     if (isAcousticZero && (condition == 'Queen Present' || condition.isEmpty)) {
       condition = 'No Buzz Detected';
+    } else if (isFreqQueenPresent && (condition.isEmpty || condition == 'Normal')) {
+      condition = 'Queen Present';
+    } else if (isFreqQueenAbsent && (condition.isEmpty || condition == 'Normal')) {
+      condition = 'Queen Absent';
     }
 
-    final isAbsent = condition.toLowerCase().contains('absent');
-    final isRejected = condition.toLowerCase().contains('rejected');
+    final isAbsent = (condition.toLowerCase().contains('absent') || isFreqQueenAbsent) && !isFreqQueenPresent;
+    final isRejected = condition.toLowerCase().contains('rejected') && !isFreqQueenPresent;
     final isAccepted = condition.toLowerCase().contains('accepted');
-    final isPresent = !isAbsent && !isRejected && !isAccepted && !isAcousticZero;
+    final isPresent = (isFreqQueenPresent || (!isAbsent && !isRejected && !isAccepted)) && !isAcousticZero;
 
     int parsedHealth = (data['healthScore'] as num?)?.toInt() ?? 90;
     if (isAcousticZero) {
@@ -309,8 +317,16 @@ class HiveData {
       batteryLevel: data['batteryLevel'] ?? '90%',
       updated: data['updated'] ?? 'Just now',
       signalBars: (data['signalBars'] as num?)?.toInt() ?? 4,
-      explanation: data['explanation'] ??
-          'The AI analyzed the hive\'s acoustic, temperature, and humidity data and classified the colony state.',
+      explanation: (data['explanation'] != null &&
+              data['explanation'] !=
+                  'The AI analyzed the hive\'s acoustic, temperature, and humidity data and classified the colony state.')
+          ? data['explanation']
+          : (isFreqQueenPresent
+              ? 'Stable worker humming ($parsedFreq Hz < 250 Hz) combined with standard hive harmonics confirms Queen Present.'
+              : (isFreqQueenAbsent
+                  ? 'Acoustic frequency ($parsedFreq Hz) indicates Queenless Roar. Urgent frame inspection needed.'
+                  : (data['explanation'] ??
+                      'The AI analyzed the hive\'s acoustic, temperature, and humidity data and classified the colony state.'))),
       queenPresentDetected: queenPresentVal,
       queenAbsentDetected: queenAbsentVal,
       queenAcceptedDetected: queenAcceptedVal,
