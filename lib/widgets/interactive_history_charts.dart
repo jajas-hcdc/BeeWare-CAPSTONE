@@ -121,7 +121,21 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     List<String> alignedDates;
 
     if (targetLen == 1) {
-      alignedDates = [cleanDates.isNotEmpty ? cleanDates.last : 'Live'];
+      // Pad single reading to 5 bars so the chart is scrollable
+      final val = cleanValues[0];
+      final label = cleanDates.isNotEmpty ? cleanDates.last : 'Just now';
+      cleanValues = [val, val, val, val, val];
+      alignedDates = ['-20m', '-15m', '-10m', '-5m', label];
+    } else if (targetLen <= 3) {
+      // Pad small sets to at least 5 bars for consistent scrolling
+      final padCount = 5 - targetLen;
+      final padValues = List<double>.filled(padCount, cleanValues.first);
+      cleanValues = [...padValues, ...cleanValues];
+      final padDates = List.generate(padCount, (i) {
+        final minsAgo = (padCount - i + targetLen - 1) * 5;
+        return minsAgo < 60 ? '-${minsAgo}m' : '-${minsAgo ~/ 60}h';
+      });
+      alignedDates = [...padDates, ...List<String>.from(cleanDates.length == targetLen ? cleanDates : [for (int i = 0; i < targetLen; i++) i == targetLen - 1 ? (cleanDates.isNotEmpty ? cleanDates.last : 'Just now') : '-${(targetLen - 1 - i) * 5}m'])];
     } else if (cleanDates.length == targetLen) {
       alignedDates = List<String>.from(cleanDates);
     } else if (cleanDates.length > targetLen) {
