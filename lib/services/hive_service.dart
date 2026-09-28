@@ -79,6 +79,53 @@ class HiveService extends ChangeNotifier {
     }
   }
 
+  List<HiveData> _mergeFirestoreDocs(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    final existingMap = {
+      for (var h in _hives) h.id: h,
+      for (var h in _hives) h.deviceId: h,
+    };
+    return docs.map((doc) {
+      final cloudHive = HiveData.fromFirestore(doc.id, doc.data());
+      final existing = existingMap[cloudHive.id] ?? existingMap[cloudHive.deviceId];
+      final bool cloudIsStaleOrEmpty = cloudHive.acoustic == '0 Hz' ||
+          cloudHive.acoustic.startsWith('0') ||
+          cloudHive.temperature == '--' ||
+          cloudHive.temperature == '0.0' ||
+          cloudHive.conditionLabel == 'Connecting';
+      final bool existingHasActiveData = existing != null &&
+          existing.acoustic != '0 Hz' &&
+          !existing.acoustic.startsWith('0') &&
+          existing.temperature != '--';
+
+      if (existingHasActiveData && cloudIsStaleOrEmpty) {
+        return cloudHive.copyWith(
+          acoustic: existing.acoustic,
+          acousticStatus: existing.acousticStatus,
+          temperature: existing.temperature,
+          humidity: existing.humidity,
+          batteryLevel: existing.batteryLevel,
+          conditionLabel: existing.conditionLabel,
+          healthScore: existing.healthScore,
+          confidence: existing.confidence,
+          explanation: existing.explanation,
+          isAlert: existing.isAlert,
+          alertSeverity: existing.alertSeverity,
+          alertLabel: existing.alertLabel,
+          alertMessage: existing.alertMessage,
+          queenPresentDetected: existing.queenPresentDetected,
+          queenAbsentDetected: existing.queenAbsentDetected,
+          queenAcceptedDetected: existing.queenAcceptedDetected,
+          queenRejectedDetected: existing.queenRejectedDetected,
+          temperatureHistory: existing.temperatureHistory,
+          humidityHistory: existing.humidityHistory,
+          acousticHistory: existing.acousticHistory,
+          historyDates: existing.historyDates,
+        );
+      }
+      return cloudHive;
+    }).toList();
+  }
+
   void _initFirestoreStream() {
     _hivesSubscription?.cancel();
     try {
@@ -87,9 +134,7 @@ class HiveService extends ChangeNotifier {
           .snapshots()
           .listen((snapshot) {
         if (snapshot.docs.isNotEmpty) {
-          _hives = snapshot.docs.map((doc) {
-            return HiveData.fromFirestore(doc.id, doc.data());
-          }).toList();
+          _hives = _mergeFirestoreDocs(snapshot.docs);
         } else {
           // If Firestore collection is empty, keep it empty for clean public use
           _hives = [];
@@ -115,9 +160,7 @@ class HiveService extends ChangeNotifier {
           .timeout(const Duration(seconds: 6));
 
       if (snapshot.docs.isNotEmpty) {
-        _hives = snapshot.docs.map((doc) {
-          return HiveData.fromFirestore(doc.id, doc.data());
-        }).toList();
+        _hives = _mergeFirestoreDocs(snapshot.docs);
 
         _saveToCache();
         ConnectivityService().recordSyncEvent();
@@ -377,6 +420,20 @@ class HiveService extends ChangeNotifier {
       _saveToCache();
       ConnectivityService().recordSyncEvent();
       _debouncedNotify();
+
+      // Mirror active telemetry to Cloud Firestore so cloud collection doesn't stay on stale 0 Hz
+      try {
+        for (final h in _hives) {
+          if (h.acoustic != '0 Hz' && !h.acoustic.startsWith('0')) {
+            FirebaseFirestore.instance.collection('hives').doc(h.id).set({
+              ...h.toMap(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true)).catchError((e) {
+              debugPrint('Firestore telemetry sync error: $e');
+            });
+          }
+        }
+      } catch (_) {}
     }
   }
 

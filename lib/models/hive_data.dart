@@ -368,6 +368,8 @@ class HiveData {
       'humidity': humidity,
       'acoustic': acoustic,
       'acousticStatus': acousticStatus,
+      'frequency': int.tryParse(acoustic.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0,
+      'frequency_hz': int.tryParse(acoustic.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0,
       'wifiStatus': wifiStatus,
       'batteryLevel': batteryLevel,
       'updated': updated,

@@ -200,14 +200,14 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: const Color(0xFFFFCC00),
         onRefresh: () async {
           await ConnectivityService().checkConnection();
+          if (ConnectivityService().isOnline) {
+            await HiveService().refreshFromCloud();
+          }
           final records = await BackendService().fetchTelemetryRecords(limit: 20);
           if (records.isNotEmpty) {
             HiveService().updateFromBackendTelemetry(records);
           }
-          if (ConnectivityService().isOnline) {
-            await HiveService().refreshFromCloud();
-            await AlertService().refreshFromCloud();
-          }
+          await AlertService().refreshFromCloud();
         },
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -253,8 +253,12 @@ class _HomeScreenState extends State<HomeScreen> {
                             await ConnectivityService().checkConnection();
                             if (ConnectivityService().isOnline) {
                               await HiveService().refreshFromCloud();
-                              await AlertService().refreshFromCloud();
                             }
+                            final records = await BackendService().fetchTelemetryRecords(limit: 20);
+                            if (records.isNotEmpty) {
+                              HiveService().updateFromBackendTelemetry(records);
+                            }
+                            await AlertService().refreshFromCloud();
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
