@@ -93,10 +93,34 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     return [];
   }
 
+  /// Generate a step-back label for the given [stepsAgo] based on timeframe.
+  /// timeframe 0 = 24H (hours), 1 = 7D (days), 2 = 30D (days/weeks).
+  String _stepLabel(int stepsAgo, int timeframe) {
+    if (timeframe == 0) {
+      // 24 Hours — step in hours
+      return '-${stepsAgo}h';
+    } else if (timeframe == 1) {
+      // 7 Days — step in days
+      return '-${stepsAgo}d';
+    } else {
+      // 30 Days — step in weeks if >= 7, else days
+      final days = stepsAgo * 7;
+      return days >= 7 ? '-${stepsAgo}w' : '-${stepsAgo}d';
+    }
+  }
+
+  String _latestLabel(int timeframe) {
+    if (timeframe == 0) return 'Now';
+    return 'Today';
+  }
+
   ({List<double> values, List<String> dates}) _prepareChartData(
     List<double> rawValues,
-    List<String> rawDates,
-  ) {
+    List<String> rawDates, {
+    int? timeframe,
+  }) {
+    final tf = timeframe ?? _selectedTimeframe;
+
     if (rawValues.isEmpty) {
       return (values: <double>[], dates: <String>[]);
     }
@@ -107,7 +131,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
     if (firstValid == -1) {
       cleanValues = [rawValues.last];
-      cleanDates = rawDates.isNotEmpty ? [rawDates.last] : ['Live'];
+      cleanDates = rawDates.isNotEmpty ? [rawDates.last] : [_latestLabel(tf)];
     } else {
       cleanValues = rawValues.sublist(firstValid);
       if (rawDates.length == rawValues.length) {
@@ -123,36 +147,43 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     if (targetLen == 1) {
       // Pad single reading to 5 bars so the chart is scrollable
       final val = cleanValues[0];
-      final label = cleanDates.isNotEmpty ? cleanDates.last : 'Just now';
+      final label = cleanDates.isNotEmpty ? cleanDates.last : _latestLabel(tf);
       cleanValues = [val, val, val, val, val];
-      alignedDates = ['-20m', '-15m', '-10m', '-5m', label];
+      alignedDates = [
+        _stepLabel(4, tf),
+        _stepLabel(3, tf),
+        _stepLabel(2, tf),
+        _stepLabel(1, tf),
+        label,
+      ];
     } else if (targetLen <= 3) {
       // Pad small sets to at least 5 bars for consistent scrolling
       final padCount = 5 - targetLen;
       final padValues = List<double>.filled(padCount, cleanValues.first);
       cleanValues = [...padValues, ...cleanValues];
       final padDates = List.generate(padCount, (i) {
-        final minsAgo = (padCount - i + targetLen - 1) * 5;
-        return minsAgo < 60 ? '-${minsAgo}m' : '-${minsAgo ~/ 60}h';
+        final stepsAgo = padCount - i + targetLen - 1;
+        return _stepLabel(stepsAgo, tf);
       });
-      alignedDates = [...padDates, ...List<String>.from(cleanDates.length == targetLen ? cleanDates : [for (int i = 0; i < targetLen; i++) i == targetLen - 1 ? (cleanDates.isNotEmpty ? cleanDates.last : 'Just now') : '-${(targetLen - 1 - i) * 5}m'])];
+      // Build real dates for the existing values
+      final realDates = cleanDates.length == targetLen
+          ? List<String>.from(cleanDates)
+          : List.generate(targetLen, (i) =>
+              i == targetLen - 1
+                  ? (cleanDates.isNotEmpty ? cleanDates.last : _latestLabel(tf))
+                  : _stepLabel(targetLen - 1 - i, tf));
+      alignedDates = [...padDates, ...realDates];
     } else if (cleanDates.length == targetLen) {
       alignedDates = List<String>.from(cleanDates);
     } else if (cleanDates.length > targetLen) {
       alignedDates = cleanDates.sublist(cleanDates.length - targetLen);
     } else {
       alignedDates = List<String>.filled(targetLen, '');
-      final latest = cleanDates.isNotEmpty ? cleanDates.last : 'Live';
+      final latest = cleanDates.isNotEmpty ? cleanDates.last : _latestLabel(tf);
       alignedDates[targetLen - 1] = latest;
       for (int i = targetLen - 2; i >= 0; i--) {
         final stepsAgo = targetLen - 1 - i;
-        final minsAgo = stepsAgo * 5;
-        if (minsAgo < 60) {
-          alignedDates[i] = '-${minsAgo}m';
-        } else {
-          final hrs = minsAgo ~/ 60;
-          alignedDates[i] = '-${hrs}h';
-        }
+        alignedDates[i] = _stepLabel(stepsAgo, tf);
       }
     }
 
