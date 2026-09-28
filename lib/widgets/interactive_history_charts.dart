@@ -281,7 +281,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     required int dataLength,
     double height = 150,
   }) {
-    final bool needsScroll = dataLength > 6;
+    final bool needsScroll = dataLength > 3;
     final chartWidth = needsScroll ? (dataLength * 48.0) : double.infinity;
 
     Widget chartContent = SizedBox(
