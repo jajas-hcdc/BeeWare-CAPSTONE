@@ -281,51 +281,52 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     required int dataLength,
     double height = 150,
   }) {
-    final bool needsScroll = dataLength > 3;
-    final chartWidth = needsScroll ? (dataLength * 48.0) : double.infinity;
+    final bool needsScroll = dataLength >= 2;
 
-    Widget chartContent = SizedBox(
-      height: height,
-      width: chartWidth,
-      child: ClipRect(
-        child: RepaintBoundary(child: chart),
-      ),
-    );
-
-    if (needsScroll) {
-      chartContent = SizedBox(
+    if (!needsScroll) {
+      // Single data point — just show it centered, no scroll
+      return SizedBox(
         height: height,
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          physics: const BouncingScrollPhysics(),
-          child: SizedBox(
-            width: chartWidth,
-            child: ClipRect(
-              child: RepaintBoundary(child: chart),
-            ),
-          ),
+        child: ClipRect(
+          child: RepaintBoundary(child: chart),
         ),
       );
     }
 
+    // Always make the chart wider than the viewport so it's swipable
+    final screenWidth = MediaQuery.of(context).size.width;
+    final availableWidth = screenWidth - 64; // minus card + screen padding
+    final perBarWidth = max(72.0, availableWidth / dataLength);
+    final chartWidth = max(dataLength * perBarWidth, availableWidth + 120);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        chartContent,
-        if (needsScroll) ...[
-          const SizedBox(height: 6),
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Icon(Icons.swipe_left, size: 13, color: Colors.black38),
-              SizedBox(width: 4),
-              Text(
-                'Swipe horizontally for more dates',
-                style: TextStyle(fontSize: 9, color: Colors.black45, fontWeight: FontWeight.w600),
+        SizedBox(
+          height: height,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: SizedBox(
+              width: chartWidth,
+              child: ClipRect(
+                child: RepaintBoundary(child: chart),
               ),
-            ],
+            ),
           ),
-        ],
+        ),
+        const SizedBox(height: 6),
+        const Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Icon(Icons.swipe_left, size: 13, color: Colors.black38),
+            SizedBox(width: 4),
+            Text(
+              'Swipe horizontally for more dates',
+              style: TextStyle(fontSize: 9, color: Colors.black45, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
       ],
     );
   }
