@@ -1,20 +1,27 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../models/hive_data.dart';
 import '../services/hive_service.dart';
 import '../services/user_profile_service.dart';
 import '../services/alert_service.dart';
 import '../services/connectivity_service.dart';
+import '../services/backend_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/circular_gauge.dart';
 import 'alert_details_screen.dart';
 import 'overall_health_assessment_screen.dart';
 import 'user_profile_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   final VoidCallback? onOpenAlerts;
 
   const HomeScreen({super.key, this.onOpenAlerts});
 
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -23,25 +30,60 @@ class HomeScreen extends StatelessWidget {
         final allHives = HiveService().hives;
         final totalHives = allHives.length;
 
-        // Count statistics for condition summary
-        int queenPresentCount = allHives.where((h) => h.conditionLabel.toLowerCase().contains('present')).length;
+        bool isHiveNoBuzz(HiveData h) {
+          final ac = h.acoustic.trim().toLowerCase();
+          final st = h.acousticStatus.trim().toLowerCase();
+          return ac == '0' ||
+              ac == '0 hz' ||
+              ac.startsWith('0 ') ||
+              st.contains('not detected') ||
+              st.contains('silent') ||
+              st.contains('no buzz');
+        }
+
+        int getEffectiveHealth(HiveData h) {
+          if (isHiveNoBuzz(h)) {
+            return h.healthScore > 30 ? 30 : h.healthScore;
+          }
+          return h.healthScore;
+        }
+
+        final hasNoBuzzAnomaly = allHives.any((h) => isHiveNoBuzz(h));
+
+        // Count statistics for condition summary:
+        // A hive with No Buzz (0 Hz) cannot be counted as Queen Present
+        int queenPresentCount = allHives.where((h) =>
+          h.conditionLabel.toLowerCase().contains('present') &&
+          !h.conditionLabel.toLowerCase().contains('no buzz') &&
+          !isHiveNoBuzz(h)
+        ).length;
         int queenAbsentCount = allHives.where((h) => h.conditionLabel.toLowerCase().contains('absent')).length;
         int queenAcceptedCount = allHives.where((h) => h.conditionLabel.toLowerCase().contains('accepted')).length;
         int queenRejectedCount = allHives.where((h) => h.conditionLabel.toLowerCase().contains('rejected')).length;
 
         final avgHealthScore = totalHives > 0
-            ? (allHives.fold<int>(0, (sum, h) => sum + h.healthScore) / totalHives).round()
+            ? (allHives.fold<int>(0, (sum, h) => sum + getEffectiveHealth(h)) / totalHives).round()
             : 0;
         final avgConfidence = totalHives > 0
-            ? (allHives.fold<int>(0, (sum, h) => sum + h.confidence) / totalHives).round()
+            ? (allHives.fold<int>(0, (sum, h) => sum + (isHiveNoBuzz(h) ? 50 : h.confidence)) / totalHives).round()
             : 0;
-        final healthyHivesCount = queenPresentCount + queenAcceptedCount;
-        final isOverallHealthy = totalHives > 0 && avgHealthScore >= 80 && queenAbsentCount == 0 && queenRejectedCount == 0;
+        final healthyHivesCount = allHives.where((h) {
+          final cond = h.conditionLabel.toLowerCase();
+          final isGoodCond = (cond.contains('present') || cond.contains('accepted')) && !cond.contains('no buzz');
+          return isGoodCond && !isHiveNoBuzz(h) && getEffectiveHealth(h) >= 70;
+        }).length;
+
+        final isOverallHealthy = totalHives > 0 &&
+            avgHealthScore >= 80 &&
+            queenAbsentCount == 0 &&
+            queenRejectedCount == 0 &&
+            !hasNoBuzzAnomaly;
+
         final healthColor = totalHives == 0
             ? Colors.black38
-            : (avgHealthScore >= 80
+            : (isOverallHealthy
                 ? AppColors.healthyGreen
-                : (avgHealthScore >= 60 ? const Color(0xFFFF9800) : Colors.red));
+                : (avgHealthScore >= 60 && !hasNoBuzzAnomaly ? const Color(0xFFFF9800) : Colors.red));
 
         // Calculate aggregate apiary environmental metrics
         double totalTemp = 0;
@@ -60,13 +102,20 @@ class HomeScreen extends StatelessWidget {
             totalHum += hum;
             validHumCount++;
           }
-          if (h.acousticStatus.toLowerCase().contains('elevated') || h.acousticStatus.toLowerCase().contains('swarming') || h.acousticStatus.toLowerCase().contains('abnormal')) {
+          if (isHiveNoBuzz(h) ||
+              h.acousticStatus.toLowerCase().contains('elevated') ||
+              h.acousticStatus.toLowerCase().contains('swarming') ||
+              h.acousticStatus.toLowerCase().contains('abnormal')) {
             hasAcousticAnomaly = true;
           }
         }
         final avgTempStr = validTempCount > 0 ? (totalTemp / validTempCount).toStringAsFixed(1) : '--';
         final avgHumStr = validHumCount > 0 ? (totalHum / validHumCount).toStringAsFixed(0) : '--';
-        final apiaryAcoustic = totalHives == 0 ? 'No Data' : (hasAcousticAnomaly ? 'Elevated\nActivity' : 'Normal\nActivity');
+        final apiaryAcoustic = totalHives == 0
+            ? 'No Data'
+            : (hasNoBuzzAnomaly
+                ? '0 Hz\n(No Buzz)'
+                : (hasAcousticAnomaly ? 'Elevated\nActivity' : 'Normal\nActivity'));
 
         return Scaffold(
           backgroundColor: AppColors.screenYellow,
@@ -103,7 +152,7 @@ class HomeScreen extends StatelessWidget {
                     ],
                   ),
                   GestureDetector(
-                    onTap: onOpenAlerts,
+                    onTap: widget.onOpenAlerts,
                     child: AnimatedBuilder(
                       animation: AlertService(),
                       builder: (context, child) {
@@ -151,6 +200,10 @@ class HomeScreen extends StatelessWidget {
         backgroundColor: const Color(0xFFFFCC00),
         onRefresh: () async {
           await ConnectivityService().checkConnection();
+          final records = await BackendService().fetchTelemetryRecords(limit: 20);
+          if (records.isNotEmpty) {
+            HiveService().updateFromBackendTelemetry(records);
+          }
           if (ConnectivityService().isOnline) {
             await HiveService().refreshFromCloud();
             await AlertService().refreshFromCloud();
@@ -524,9 +577,10 @@ class HomeScreen extends StatelessWidget {
                 Expanded(
                   child: _sensorCard(
                     title: 'Acoustic Signal',
-                    icon: Icons.show_chart,
-                    iconColor: const Color(0xFFFFB300),
+                    icon: hasNoBuzzAnomaly ? Icons.mic_off_rounded : Icons.show_chart,
+                    iconColor: hasNoBuzzAnomaly ? Colors.red : const Color(0xFFFFB300),
                     value: apiaryAcoustic,
+                    valueColor: hasNoBuzzAnomaly ? Colors.red : null,
                     isSmallValue: true,
                     onTap: () {
                       Navigator.of(context).push(
@@ -647,6 +701,7 @@ class HomeScreen extends StatelessWidget {
     required IconData icon,
     required Color iconColor,
     required String value,
+    Color? valueColor,
     bool isSmallValue = false,
     VoidCallback? onTap,
   }) {
@@ -680,7 +735,7 @@ class HomeScreen extends StatelessWidget {
                     style: TextStyle(
                       fontSize: isSmallValue ? 11 : 16,
                       fontWeight: FontWeight.w900,
-                      color: Colors.black,
+                      color: valueColor ?? Colors.black,
                       height: 1.1,
                     ),
                   ),

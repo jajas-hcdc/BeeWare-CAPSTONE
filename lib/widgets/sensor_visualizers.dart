@@ -392,11 +392,13 @@ class _MoistureWavePainter extends CustomPainter {
 class AcousticSignalVisualizer extends StatelessWidget {
   final String conditionLabel;
   final String acousticStatus;
+  final String? acoustic;
 
   const AcousticSignalVisualizer({
     super.key,
     required this.conditionLabel,
     this.acousticStatus = 'Normal',
+    this.acoustic,
   });
 
   @override
@@ -404,23 +406,52 @@ class AcousticSignalVisualizer extends StatelessWidget {
     Color barColor;
     List<double> heights;
 
-    final condition = conditionLabel.toLowerCase();
-    if (condition.contains('absent')) {
-      barColor = Colors.red;
-      // High agitation queenless roar pattern
-      heights = [0.3, 0.7, 0.9, 0.4, 0.85, 1.0, 0.6, 0.9, 0.75, 0.4, 0.8, 0.95, 0.5, 0.85, 0.3];
-    } else if (condition.contains('rejected')) {
-      barColor = const Color(0xFFE65100);
-      // Erratic worker aggression buzzing
-      heights = [0.4, 0.8, 0.6, 0.9, 0.7, 0.95, 0.85, 0.6, 0.8, 0.7, 0.9, 0.5, 0.8, 0.6, 0.4];
-    } else if (condition.contains('accepted')) {
-      barColor = const Color(0xFF1976D2);
-      // Piping rhythm pattern
-      heights = [0.2, 0.4, 0.8, 0.9, 0.8, 0.3, 0.2, 0.75, 0.85, 0.7, 0.2, 0.3, 0.6, 0.4, 0.2];
+    final acousticClean = (acoustic ?? '').trim().toLowerCase();
+    final statusClean = acousticStatus.trim().toLowerCase();
+    final isNotDetected = acousticClean == '0' ||
+        acousticClean == '0 hz' ||
+        acousticClean.startsWith('0 ') ||
+        statusClean.contains('not detected') ||
+        statusClean.contains('0 hz') ||
+        statusClean.contains('offline');
+
+    if (isNotDetected) {
+      barColor = Colors.grey.shade400;
+      // Flat silent equalizer line when no acoustic signal or 0 Hz detected
+      heights = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1];
     } else {
-      barColor = AppColors.healthyGreen;
-      // Steady harmonic worker hum (180-220 Hz)
-      heights = [0.3, 0.45, 0.6, 0.7, 0.8, 0.75, 0.65, 0.55, 0.65, 0.75, 0.8, 0.7, 0.6, 0.45, 0.3];
+      final condition = conditionLabel.toLowerCase();
+      if (condition.contains('absent')) {
+        barColor = Colors.red;
+        // High agitation queenless roar pattern
+        heights = [0.3, 0.7, 0.9, 0.4, 0.85, 1.0, 0.6, 0.9, 0.75, 0.4, 0.8, 0.95, 0.5, 0.85, 0.3];
+      } else if (condition.contains('rejected')) {
+        barColor = const Color(0xFFE65100);
+        // Erratic worker aggression buzzing
+        heights = [0.4, 0.8, 0.6, 0.9, 0.7, 0.95, 0.85, 0.6, 0.8, 0.7, 0.9, 0.5, 0.8, 0.6, 0.4];
+      } else if (condition.contains('accepted')) {
+        barColor = const Color(0xFF1976D2);
+        // Piping rhythm pattern
+        heights = [0.2, 0.4, 0.8, 0.9, 0.8, 0.3, 0.2, 0.75, 0.85, 0.7, 0.2, 0.3, 0.6, 0.4, 0.2];
+      } else {
+        barColor = AppColors.healthyGreen;
+        // Steady harmonic worker hum (180-220 Hz)
+        heights = [0.3, 0.45, 0.6, 0.7, 0.8, 0.75, 0.65, 0.55, 0.65, 0.75, 0.8, 0.7, 0.6, 0.45, 0.3];
+      }
+    }
+
+    String readoutText;
+    if (isNotDetected) {
+      readoutText = '0 Hz • Not Detected';
+    } else if (acoustic != null && acoustic!.toLowerCase().contains('hz')) {
+      readoutText = '${acoustic!.trim()} • Active';
+    } else {
+      final condition = conditionLabel.toLowerCase();
+      readoutText = condition.contains('absent')
+          ? '380 Hz • 72 dB'
+          : (condition.contains('rejected')
+              ? '420 Hz • 76 dB'
+              : (condition.contains('accepted') ? '240 Hz • 60 dB' : '205 Hz • 56 dB'));
     }
 
     return Column(
@@ -470,11 +501,7 @@ class AcousticSignalVisualizer extends StatelessWidget {
             ),
             const SizedBox(width: 4),
             Text(
-              condition.contains('absent')
-                  ? '380 Hz • 72 dB'
-                  : (condition.contains('rejected')
-                      ? '420 Hz • 76 dB'
-                      : (condition.contains('accepted') ? '240 Hz • 60 dB' : '205 Hz • 56 dB')),
+              readoutText,
               style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w700,

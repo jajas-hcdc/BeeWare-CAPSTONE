@@ -17,17 +17,46 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
         final hives = HiveService().hives;
 
         final totalHives = hives.length;
-        final presentCount = hives.where((h) => h.conditionLabel.contains('Present')).length;
+        bool isHiveNoBuzz(HiveData h) {
+          final clean = h.acoustic.trim().toLowerCase();
+          final st = h.acousticStatus.trim().toLowerCase();
+          return clean == '0' ||
+              clean == '0 hz' ||
+              clean.startsWith('0 ') ||
+              st.contains('not detected') ||
+              st.contains('silent') ||
+              st.contains('no buzz');
+        }
+
+        int getEffectiveHealth(HiveData h) {
+          if (isHiveNoBuzz(h)) {
+            return h.healthScore > 30 ? 30 : h.healthScore;
+          }
+          return h.healthScore;
+        }
+
+        final noBuzzHives = hives.where(isHiveNoBuzz).toList();
+        final hasNoBuzzAnomaly = noBuzzHives.isNotEmpty;
+
+        final presentCount = hives.where((h) =>
+          h.conditionLabel.contains('Present') &&
+          !h.conditionLabel.toLowerCase().contains('no buzz') &&
+          !isHiveNoBuzz(h)
+        ).length;
         final absentCount = hives.where((h) => h.conditionLabel.contains('Absent')).length;
         final acceptedCount = hives.where((h) => h.conditionLabel.contains('Accepted')).length;
         final rejectedCount = hives.where((h) => h.conditionLabel.contains('Rejected')).length;
-        final healthyCount = presentCount + acceptedCount;
+        final healthyCount = hives.where((h) {
+          final cond = h.conditionLabel.toLowerCase();
+          final isGoodCond = (cond.contains('present') || cond.contains('accepted')) && !cond.contains('no buzz');
+          return isGoodCond && !isHiveNoBuzz(h) && getEffectiveHealth(h) >= 70;
+        }).length;
 
         final avgHealthScore = totalHives > 0
-            ? (hives.fold<int>(0, (sum, h) => sum + h.healthScore) / totalHives).round()
+            ? (hives.fold<int>(0, (sum, h) => sum + getEffectiveHealth(h)) / totalHives).round()
             : 0;
         final avgConfidence = totalHives > 0
-            ? (hives.fold<int>(0, (sum, h) => sum + h.confidence) / totalHives).round()
+            ? (hives.fold<int>(0, (sum, h) => sum + (isHiveNoBuzz(h) ? 50 : h.confidence)) / totalHives).round()
             : 0;
 
         // Calculate average temp and humidity
@@ -50,12 +79,16 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
         final avgTempStr = validTempCount > 0 ? (totalTemp / validTempCount).toStringAsFixed(1) : '--';
         final avgHumStr = validHumCount > 0 ? (totalHum / validHumCount).toStringAsFixed(0) : '--';
 
-        final isOverallHealthy = totalHives > 0 && avgHealthScore >= 80 && absentCount == 0 && rejectedCount == 0;
+        final isOverallHealthy = totalHives > 0 &&
+            avgHealthScore >= 80 &&
+            absentCount == 0 &&
+            rejectedCount == 0 &&
+            !hasNoBuzzAnomaly;
         final healthColor = totalHives == 0
             ? Colors.black38
-            : (avgHealthScore >= 80
+            : (isOverallHealthy
                 ? AppColors.healthyGreen
-                : (avgHealthScore >= 60 ? const Color(0xFFFF9800) : Colors.red));
+                : (avgHealthScore >= 60 && !hasNoBuzzAnomaly ? const Color(0xFFFF9800) : Colors.red));
 
         return Scaffold(
           backgroundColor: AppColors.screenYellow,
@@ -240,7 +273,9 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
                             ? 'ℹ️ No hives connected yet. Once you pair an IoT device or add a hive, real-time AI colony diagnostics and insights will appear here.'
                             : (absentCount > 0 || rejectedCount > 0
                                 ? '⚠️ Attention Needed: $absentCount hive(s) detected with Queen Absent and $rejectedCount hive(s) with Queen Rejected. Prioritize physical inspections of affected boxes immediately to check for emergency queen cups or introduce new mated queens.'
-                                : '✅ All $totalHives monitored colonies are exhibiting normal acoustic buzzing and brood thermoregulation. Continue standard routine apiary checks and maintain clean water sources nearby.'),
+                                : (noBuzzHives.isNotEmpty
+                                    ? '⚠️ No Buzz Detected: ${noBuzzHives.length} hive(s) (${noBuzzHives.map((h) => h.name).join(", ")}) currently have no acoustic buzz detected (0 Hz). Inspect microphone hardware connections or verify colony acoustic activity.'
+                                    : '✅ All $totalHives monitored colonies are exhibiting normal acoustic buzzing and brood thermoregulation. Continue standard routine apiary checks and maintain clean water sources nearby.')),
                         style: const TextStyle(fontSize: 12, color: Colors.black87, height: 1.4),
                       ),
                     ],
@@ -385,9 +420,19 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
                         style: const TextStyle(fontSize: 11, color: Colors.black87, fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(width: 10),
-                      Text(
-                        'Audio: ${hive.acousticStatus}',
-                        style: const TextStyle(fontSize: 11, color: Colors.black87, fontWeight: FontWeight.w600),
+                      Builder(
+                        builder: (context) {
+                          final clean = hive.acoustic.trim().toLowerCase();
+                          final isNoBuzz = clean == '0' || clean == '0 hz' || clean.startsWith('0 ') || hive.acousticStatus.toLowerCase().contains('not detected');
+                          return Text(
+                            isNoBuzz ? 'Audio: No buzz (0 Hz)' : 'Audio: ${hive.acousticStatus}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isNoBuzz ? const Color(0xFFD32F2F) : Colors.black87,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),

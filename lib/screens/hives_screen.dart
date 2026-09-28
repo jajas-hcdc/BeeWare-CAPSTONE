@@ -5,8 +5,7 @@ import '../theme/app_theme.dart';
 import '../widgets/beehive_icon.dart';
 import 'hive_detail_screen.dart';
 import 'hive_management_screen.dart';
-import 'edit_hive_screen.dart';
-import 'node_provisioning_screen.dart';
+import 'qr_hive_scanner_screen.dart';
 
 class HivesScreen extends StatefulWidget {
   const HivesScreen({super.key});
@@ -20,108 +19,8 @@ class _HivesScreenState extends State<HivesScreen> {
   String _searchQuery = '';
 
   void _showAddHiveOptions() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Add / Pair Hive',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Colors.black),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 20),
-                    onPressed: () => Navigator.of(ctx).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-
-              // Option 1: BLE Provisioning
-              Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF9C4),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.black, width: 1.5),
-                ),
-                child: ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFCC00),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.black, width: 1.2),
-                    ),
-                    child: const Icon(Icons.bluetooth_searching, color: Colors.black, size: 24),
-                  ),
-                  title: const Text(
-                    'Pair IoT Node (BLE SmartConfig)',
-                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Colors.black),
-                  ),
-                  subtitle: const Text(
-                    'Search & send Wi-Fi credentials to ESP32 node',
-                    style: TextStyle(fontSize: 11, color: Colors.black54),
-                  ),
-                  trailing: const Icon(Icons.chevron_right, color: Colors.black),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (context) => const NodeProvisioningScreen()),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Option 2: Manual Add
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.black26, width: 1.2),
-                ),
-                child: ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.black26, width: 1),
-                    ),
-                    child: const Icon(Icons.edit_note, color: Colors.black, size: 24),
-                  ),
-                  title: const Text(
-                    'Add Hive Manually',
-                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Colors.black),
-                  ),
-                  subtitle: const Text(
-                    'Create hive profile without physical sensor pairing',
-                    style: TextStyle(fontSize: 11, color: Colors.black54),
-                  ),
-                  trailing: const Icon(Icons.chevron_right, color: Colors.black45),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (context) => const EditHiveScreen()),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const QrHiveScannerScreen()),
     );
   }
 
@@ -138,8 +37,15 @@ class _HivesScreenState extends State<HivesScreen> {
       builder: (context, child) {
         final allHives = HiveService().hives;
         final filteredHives = allHives.where((h) {
+          final clean = h.acoustic.trim().toLowerCase();
+          final isNoBuzz = clean == '0' ||
+              clean == '0 hz' ||
+              clean.startsWith('0 ') ||
+              h.acousticStatus.toLowerCase().contains('not detected');
+          final displayCondition = isNoBuzz ? 'No Buzz Detected' : h.conditionLabel;
           return h.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-              h.conditionLabel.toLowerCase().contains(_searchQuery.toLowerCase());
+              h.conditionLabel.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+              displayCondition.toLowerCase().contains(_searchQuery.toLowerCase());
         }).toList();
 
         return Scaffold(
@@ -305,6 +211,20 @@ class _HivesScreenState extends State<HivesScreen> {
   }
 
   Widget _buildHiveCard(BuildContext context, HiveData hive) {
+    final acousticClean = hive.acoustic.trim().toLowerCase();
+    final isAcousticNotDetected = acousticClean == '0' ||
+        acousticClean == '0 hz' ||
+        acousticClean.startsWith('0 ') ||
+        hive.acousticStatus.toLowerCase().contains('not detected');
+
+    final conditionText = isAcousticNotDetected ? 'No Buzz Detected' : hive.conditionLabel;
+    final conditionBgColor = isAcousticNotDetected ? const Color(0xFFFFEBEE) : hive.labelBgColor;
+    final conditionTextColor = isAcousticNotDetected
+        ? const Color(0xFFC62828)
+        : (hive.labelColor == Colors.grey ? Colors.black87 : hive.labelColor);
+    final confidenceText = isAcousticNotDetected ? '0%' : '${hive.confidence}%';
+    final confidenceColor = isAcousticNotDetected ? const Color(0xFFD32F2F) : Colors.black;
+
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
@@ -340,15 +260,15 @@ class _HivesScreenState extends State<HivesScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: hive.labelBgColor,
+                      color: conditionBgColor,
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
-                      hive.conditionLabel,
+                      conditionText,
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: hive.labelColor == Colors.grey ? Colors.black87 : hive.labelColor,
+                        color: conditionTextColor,
                       ),
                     ),
                   ),
@@ -377,11 +297,11 @@ class _HivesScreenState extends State<HivesScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${hive.confidence}%',
-                  style: const TextStyle(
+                  confidenceText,
+                  style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w900,
-                    color: Colors.black,
+                    color: confidenceColor,
                   ),
                 ),
                 const SizedBox(height: 6),

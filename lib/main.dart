@@ -13,6 +13,7 @@ import 'services/alert_service.dart';
 import 'services/user_profile_service.dart';
 import 'services/auth_service.dart';
 import 'services/connectivity_service.dart';
+import 'services/backend_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/offline_screen.dart';
 import 'theme/app_theme.dart';
@@ -119,11 +120,67 @@ class _MainNavigationState extends State<MainNavigation> {
   late final PageController _pageController;
   StreamSubscription? _msgSub;
   StreamSubscription? _msgOpenedSub;
+  StreamSubscription? _alertSub;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _selectedIndex);
+
+    // Start HTTP polling for live ESP32 SQLite telemetry
+    BackendService().startTelemetryPolling(interval: const Duration(seconds: 4));
+
+    // 0. In-app live sensor & acoustic anomaly notification banner
+    _alertSub = AlertService().onAlertTriggered.listen((alert) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+      ScaffoldMessenger.of(context).showMaterialBanner(
+        MaterialBanner(
+          backgroundColor: const Color(0xFFFFEBEE),
+          leading: const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 28),
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                alert.title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 13,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                alert.message,
+                style: const TextStyle(fontSize: 11, color: Colors.black87),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
+              child: const Text('Dismiss', style: TextStyle(color: Colors.black54, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+                _navigateToHive(alert.hiveId);
+              },
+              child: const Text('Inspect Hive', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+          ],
+        ),
+      );
+    });
+
     // 1. Foreground in-app notification banner
     _msgSub = FirebaseService().onMessageStream.listen((message) {
       if (!mounted) return;
@@ -194,9 +251,11 @@ class _MainNavigationState extends State<MainNavigation> {
 
   @override
   void dispose() {
+    BackendService().stopTelemetryPolling();
     _pageController.dispose();
     _msgSub?.cancel();
     _msgOpenedSub?.cancel();
+    _alertSub?.cancel();
     super.dispose();
   }
 

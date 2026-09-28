@@ -37,7 +37,7 @@ class HiveService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final jsonList = _hives.map((h) => h.toJson()).toList();
       final encoded = jsonEncode(jsonList);
-      await prefs.setString('beeware_cached_hives_shared', encoded);
+      await prefs.setString('beeware_cached_shared_apiary_hives', encoded);
       await prefs.setString('beeware_cached_hives_latest', encoded);
     } catch (e) {
       debugPrint('Error saving hives to cache: $e');
@@ -47,7 +47,7 @@ class HiveService extends ChangeNotifier {
   Future<void> _loadFromCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      String? raw = prefs.getString('beeware_cached_hives_shared');
+      String? raw = prefs.getString('beeware_cached_shared_apiary_hives');
       raw ??= prefs.getString('beeware_cached_hives_latest');
 
       if (raw != null && raw.isNotEmpty) {
@@ -55,10 +55,9 @@ class HiveService extends ChangeNotifier {
         final cached = decoded
             .map((item) => HiveData.fromJson(Map<String, dynamic>.from(item as Map)))
             .toList();
-        if (cached.isNotEmpty) {
-          _hives = cached;
-          notifyListeners();
-        }
+        _hives = cached;
+        notifyListeners();
+        return;
       }
     } catch (e) {
       debugPrint('Error loading cached hives: $e');
@@ -67,18 +66,16 @@ class HiveService extends ChangeNotifier {
 
   void _listenToAuthChanges() {
     try {
+      // Connect to Firestore stream immediately on app startup
+      _initFirestoreStream();
+
       _authSubscription = AuthService().authStateChanges().listen((user) {
-        if (user != null && !user.isAnonymous) {
-          _loadFromCache();
-          _initFirestoreStream();
-        } else {
-          _hivesSubscription?.cancel();
-          _hives = [];
-          _debouncedNotify();
-        }
+        // Ensure stream is active and refresh from cloud
+        _initFirestoreStream();
+        refreshFromCloud();
       });
     } catch (e) {
-      debugPrint('Auth listener init skipped (testing or uninitialized): $e');
+      debugPrint('Auth listener init skipped: $e');
     }
   }
 
@@ -89,16 +86,20 @@ class HiveService extends ChangeNotifier {
           .collection('hives')
           .snapshots()
           .listen((snapshot) {
-        // Shared Apiary: All authenticated accounts see all active hives in real time
-        _hives = snapshot.docs.map((doc) {
-          return HiveData.fromFirestore(doc.id, doc.data());
-        }).toList();
+        if (snapshot.docs.isNotEmpty) {
+          _hives = snapshot.docs.map((doc) {
+            return HiveData.fromFirestore(doc.id, doc.data());
+          }).toList();
+        } else {
+          // If Firestore collection is empty, keep it empty for clean public use
+          _hives = [];
+        }
 
         _saveToCache();
         ConnectivityService().recordSyncEvent();
         _debouncedNotify();
       }, onError: (e) {
-        debugPrint('Firestore hives stream error: $e');
+        debugPrint('Firestore shared hives stream error: $e');
       });
     } catch (e) {
       debugPrint('Firestore stream init skipped: $e');
@@ -114,11 +115,15 @@ class HiveService extends ChangeNotifier {
           .timeout(const Duration(seconds: 6));
 
       if (snapshot.docs.isNotEmpty) {
-        // Shared Apiary: All accounts get the complete synchronized list of hives
         _hives = snapshot.docs.map((doc) {
           return HiveData.fromFirestore(doc.id, doc.data());
         }).toList();
 
+        _saveToCache();
+        ConnectivityService().recordSyncEvent();
+        notifyListeners();
+      } else {
+        _hives = [];
         _saveToCache();
         ConnectivityService().recordSyncEvent();
         notifyListeners();
@@ -129,22 +134,22 @@ class HiveService extends ChangeNotifier {
   }
 
   void addHive(HiveData hive) {
+    // Add locally for instant responsive UI
+    _hives.removeWhere((h) => h.id == hive.id);
     _hives.add(hive);
+    _saveToCache();
     notifyListeners();
 
+    // Push to shared Firestore collection so all users receive it in real-time
     try {
-      final user = AuthService().currentUser;
-      if (user != null) {
-        FirebaseFirestore.instance.collection('hives').doc(hive.id).set({
-          ...hive.toMap(),
-          'userId': user.uid,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true)).catchError((e) {
-          debugPrint('Firestore add hive error: $e');
-        });
-      }
+      FirebaseFirestore.instance.collection('hives').doc(hive.id).set({
+        ...hive.toMap(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).catchError((e) {
+        debugPrint('Firestore add shared hive error: $e');
+      });
     } catch (e) {
-      debugPrint('Firestore add hive skipped (offline or testing): $e');
+      debugPrint('Firestore add shared hive skipped: $e');
     }
   }
 
@@ -152,38 +157,35 @@ class HiveService extends ChangeNotifier {
     final index = _hives.indexWhere((h) => h.id == hive.id);
     if (index != -1) {
       _hives[index] = hive;
+      _saveToCache();
       notifyListeners();
     }
 
+    // Push update to shared Firestore collection
     try {
-      final user = AuthService().currentUser;
-      if (user != null) {
-        FirebaseFirestore.instance.collection('hives').doc(hive.id).set({
-          ...hive.toMap(),
-          'userId': user.uid,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true)).catchError((e) {
-          debugPrint('Firestore update hive error: $e');
-        });
-      }
+      FirebaseFirestore.instance.collection('hives').doc(hive.id).set({
+        ...hive.toMap(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).catchError((e) {
+        debugPrint('Firestore update shared hive error: $e');
+      });
     } catch (e) {
-      debugPrint('Firestore update hive skipped: $e');
+      debugPrint('Firestore update shared hive skipped: $e');
     }
   }
 
   void deleteHive(String id) {
     _hives.removeWhere((h) => h.id == id);
+    _saveToCache();
     notifyListeners();
 
+    // Delete from shared Firestore collection so it reflects to all users immediately
     try {
-      final user = AuthService().currentUser;
-      if (user != null) {
-        FirebaseFirestore.instance.collection('hives').doc(id).delete().catchError((e) {
-          debugPrint('Firestore delete hive error: $e');
-        });
-      }
+      FirebaseFirestore.instance.collection('hives').doc(id).delete().catchError((e) {
+        debugPrint('Firestore delete shared hive error: $e');
+      });
     } catch (e) {
-      debugPrint('Firestore delete hive skipped: $e');
+      debugPrint('Firestore delete shared hive skipped: $e');
     }
   }
 
@@ -193,6 +195,208 @@ class HiveService extends ChangeNotifier {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Updates local hive instances with fresh SQLite telemetry data from FastAPI backend
+  void updateFromBackendTelemetry(List<Map<String, dynamic>> records) {
+    if (records.isEmpty) return;
+
+    // Group records by deviceId
+    final Map<String, List<Map<String, dynamic>>> grouped = {};
+    for (final r in records) {
+      final devId = (r['device_id'] ?? r['deviceId'] ?? 'BW-001-ALPHA').toString();
+      grouped.putIfAbsent(devId, () => []).add(r);
+    }
+
+    bool hasChanged = false;
+
+    grouped.forEach((deviceId, devRecords) {
+      if (devRecords.isEmpty) return;
+      final latest = devRecords.first;
+      final temp = (latest['temperature'] as num?)?.toDouble() ?? 0.0;
+      final hum = (latest['humidity'] as num?)?.toDouble() ?? 0.0;
+      final batt = (latest['battery_level'] as num?)?.toInt() ?? 100;
+      final rssi = (latest['wifi_rssi'] as num?)?.toInt() ?? -65;
+      final audioPath = latest['audio_file_path'] as String?;
+
+      int signalBars = 4;
+      if (rssi >= -60) {
+        signalBars = 4;
+      } else if (rssi >= -70) {
+        signalBars = 3;
+      } else if (rssi >= -80) {
+        signalBars = 2;
+      } else {
+        signalBars = 1;
+      }
+
+      // Extract real-time temperature, humidity, dates & acoustic history from SQLite records
+      final tempHist = devRecords
+          .map((r) => (r['temperature'] as num?)?.toDouble() ?? 0.0)
+          .take(20)
+          .toList()
+          .reversed
+          .toList();
+      final humHist = devRecords
+          .map((r) => (r['humidity'] as num?)?.toDouble() ?? 0.0)
+          .take(20)
+          .toList()
+          .reversed
+          .toList();
+      final datesHist = devRecords
+          .map((r) {
+            final ts = (r['timestamp'] ?? r['created_at'] ?? '').toString();
+            if (ts.contains('_')) {
+              final parts = ts.split('_');
+              if (parts.length > 1 && parts[1].length >= 4) {
+                return '${parts[1].substring(0, 2)}:${parts[1].substring(2, 4)}';
+              }
+            } else if (ts.contains(':')) {
+              final parts = ts.split(' ');
+              return parts.length > 1 ? parts[1].substring(0, 5) : ts.substring(0, 5);
+            }
+            return ts.isNotEmpty ? ts : 'Now';
+          })
+          .take(20)
+          .toList()
+          .reversed
+          .toList();
+      final acousticHist = devRecords
+          .map((r) {
+            final f = ((r['frequency'] ?? r['frequency_hz'] ?? 0) as num).toDouble();
+            if (f > 0) return (f / 5.0).clamp(20.0, 95.0);
+            final peak = (r['peak_audio'] as num?)?.toDouble();
+            if (peak != null && peak > 0) {
+              return (peak / 50.0).clamp(20.0, 95.0);
+            }
+            return 0.0;
+          })
+          .take(20)
+          .toList()
+          .reversed
+          .toList();
+
+      // Extract acoustic frequency (Hz)
+      final rawFreq = latest['frequency'] ?? latest['frequency_hz'];
+      int freqHz = 0;
+      if (rawFreq is num) {
+        freqHz = rawFreq.toInt();
+      } else if (rawFreq is String) {
+        freqHz = int.tryParse(rawFreq.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+      }
+      final bool hasAcoustic = freqHz > 0;
+      final String acousticStr = hasAcoustic ? '$freqHz Hz' : '0 Hz';
+      final String acousticStatusStr = hasAcoustic ? 'Normal' : 'Not Detected (0 Hz)';
+
+      // Extract condition label & confidence if pushed by ESP32 / cloud
+      String? condLabel = (latest['conditionLabel'] ?? latest['queen_status']) as String?;
+      if (!hasAcoustic && (condLabel == null || condLabel == 'Queen Present' || condLabel == 'Normal')) {
+        condLabel = 'No Buzz Detected';
+      }
+      final conf = (latest['confidence'] as num?)?.toInt();
+      final health = (latest['healthScore'] as num?)?.toInt();
+
+      // Dynamically calculate health score from real-time sensor metrics
+      final dynamicHealth = _calculateDynamicHealthScore(
+        temp: temp,
+        hum: hum,
+        freqHz: freqHz,
+        condition: condLabel ?? 'Queen Present',
+      );
+
+      final effectiveHealth = !hasAcoustic
+          ? 30
+          : ((health != null && health > 0) ? health : dynamicHealth);
+
+      // Find matching hive by deviceId, id, or name
+      final index = _hives.indexWhere((h) =>
+          h.deviceId.trim().toUpperCase() == deviceId.trim().toUpperCase() ||
+          h.id.trim().toUpperCase() == deviceId.trim().toUpperCase() ||
+          (h.name.trim().isNotEmpty && h.name.toUpperCase().contains(deviceId.toUpperCase())));
+
+      if (index != -1) {
+        final existing = _hives[index];
+        _hives[index] = existing.copyWith(
+          conditionLabel: condLabel ?? existing.conditionLabel,
+          confidence: conf ?? (!hasAcoustic ? 50 : existing.confidence),
+          healthScore: effectiveHealth,
+          temperature: temp.toStringAsFixed(1),
+          humidity: hum.toStringAsFixed(0),
+          acoustic: acousticStr,
+          acousticStatus: acousticStatusStr,
+          isAlert: !hasAcoustic || existing.isAlert,
+          alertSeverity: !hasAcoustic ? 'Critical' : existing.alertSeverity,
+          alertLabel: !hasAcoustic ? '⚠️ Acoustic Signal Not Detected (0 Hz)' : existing.alertLabel,
+          alertMessage: !hasAcoustic
+              ? 'Acoustic microphone on ${existing.name} is detecting 0 Hz (silent or disconnected).'
+              : existing.alertMessage,
+          queenPresentDetected: !hasAcoustic ? false : existing.queenPresentDetected,
+          batteryLevel: '$batt%',
+          wifiStatus: 'Connected',
+          signalBars: signalBars,
+          updated: 'Just now',
+          audioFilePath: audioPath ?? existing.audioFilePath,
+          historyDates: datesHist.isNotEmpty ? datesHist : existing.historyDates,
+          temperatureHistory: tempHist.isNotEmpty ? tempHist : existing.temperatureHistory,
+          humidityHistory: humHist.isNotEmpty ? humHist : existing.humidityHistory,
+          acousticHistory: acousticHist.isNotEmpty ? acousticHist : existing.acousticHistory,
+        );
+        hasChanged = true;
+      }
+    });
+
+    if (hasChanged) {
+      _saveToCache();
+      ConnectivityService().recordSyncEvent();
+      _debouncedNotify();
+    }
+  }
+
+  /// Dynamically computes a health score (0 - 100) directly from real-time
+  /// temperature (DHT22), humidity (DHT22), acoustic frequency (INMP441),
+  /// and colony queen status.
+  static int _calculateDynamicHealthScore({
+    required double temp,
+    required double hum,
+    required int freqHz,
+    required String condition,
+  }) {
+    if (temp <= 0.0 && hum <= 0.0 && freqHz == 0) return 0;
+    if (freqHz == 0) return 30; // Acoustic missing / silent
+
+    double score = 100.0;
+
+    // 1. Brood nest temperature (Optimal: 32°C - 36°C)
+    if (temp >= 32.0 && temp <= 36.0) {
+      // Optimal range
+    } else if ((temp >= 30.0 && temp < 32.0) || (temp > 36.0 && temp <= 37.5)) {
+      score -= 6.0; // Mild deviation
+    } else if ((temp >= 26.0 && temp < 30.0) || (temp > 37.5 && temp <= 39.0)) {
+      score -= 18.0; // Moderate thermal stress
+    } else {
+      score -= 35.0; // Severe thermal stress
+    }
+
+    // 2. Relative humidity (Optimal: 50% - 75%)
+    if (hum >= 50.0 && hum <= 75.0) {
+      // Optimal range
+    } else if ((hum >= 40.0 && hum < 50.0) || (hum > 75.0 && hum <= 82.0)) {
+      score -= 5.0; // Mild deviation
+    } else {
+      score -= 15.0; // Excess moisture or extreme dryness
+    }
+
+    // 3. Acoustic frequency & Queen condition
+    final cond = condition.toLowerCase();
+    if (cond.contains('absent')) {
+      score -= 40.0;
+    } else if (cond.contains('rejected')) {
+      score -= 35.0;
+    } else if (cond.contains('accepted') || cond.contains('present')) {
+      if (freqHz > 320) score -= 15.0; // Worker agitation
+    }
+
+    return score.round().clamp(10, 100);
   }
 
   @override

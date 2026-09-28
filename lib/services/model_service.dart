@@ -1,6 +1,8 @@
 // lib/services/model_service.dart
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'audio_processor.dart';
 
 class ModelService {
   static final ModelService _instance = ModelService._internal();
@@ -32,14 +34,14 @@ class ModelService {
     try {
       _interpreter = await Interpreter.fromAsset('assets/beeware_model.tflite');
       _isInitialized = true;
-      print('✅ Model loaded successfully from assets/beeware_model.tflite');
+      debugPrint('✅ Model loaded successfully from assets/beeware_model.tflite');
     } catch (e) {
       try {
         _interpreter = await Interpreter.fromAsset('beeware_model.tflite');
         _isInitialized = true;
-        print('✅ Model loaded successfully from beeware_model.tflite');
+        debugPrint('✅ Model loaded successfully from beeware_model.tflite');
       } catch (e2) {
-        print('❌ Error loading model: $e2');
+        debugPrint('❌ Error loading model: $e2');
         rethrow;
       }
     }
@@ -47,29 +49,21 @@ class ModelService {
 
   bool get isInitialized => _isInitialized;
 
-  /// Extract MFCC features from audio file
-  /// Mimics Python pipeline: updated to 128x128 dimensions for the new model
+  /// Extract mel-spectrogram features from a recorded WAV file.
+  ///
+  /// Matches the Python training pipeline exactly:
+  ///   librosa.feature.melspectrogram(y, sr=22050, n_mels=128)
+  ///   librosa.power_to_db(S, ref=np.max)
+  ///   → shape [128 mel bands][128 time frames][1 channel]
+  ///
+  /// Runs in a background isolate via [AudioProcessor].
   Future<List<List<List<double>>>> extractMFCC(String audioPath) async {
     try {
-      // This is still a placeholder until native MFCC extraction is implemented.
-      return _generatePlaceholderMFCC();
+      return await AudioProcessor.extractMelSpectrogram(audioPath);
     } catch (e) {
-      print('Error extracting MFCC: $e');
+      debugPrint('Error extracting mel-spectrogram: $e');
       rethrow;
     }
-  }
-
-  /// Generate placeholder MFCC (128x128) - replace with actual extraction
-  List<List<List<double>>> _generatePlaceholderMFCC() {
-    List<List<List<double>>> mfcc = [];
-    for (int i = 0; i < 128; i++) {
-      List<List<double>> timeSteps = [];
-      for (int j = 0; j < 128; j++) {
-        timeSteps.add([Random().nextDouble()]);
-      }
-      mfcc.add(timeSteps);
-    }
-    return mfcc;
   }
 
   /// Run inference on MFCC features using the dual output heads
@@ -150,7 +144,7 @@ class ModelService {
         },
       };
     } catch (e) {
-      print('Error running inference: $e');
+      debugPrint('Error running inference: $e');
       rethrow;
     }
   }

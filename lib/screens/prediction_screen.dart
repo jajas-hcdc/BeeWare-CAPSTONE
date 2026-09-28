@@ -43,7 +43,7 @@ class _PredictionScreenState extends State<PredictionScreen> {
     
     try {
       await _modelService.initialize();
-      print('✅ Services initialized');
+      debugPrint('✅ Services initialized');
     } catch (e) {
       setState(() {
         _errorMessage = 'Failed to load model: $e';
@@ -116,7 +116,7 @@ class _PredictionScreenState extends State<PredictionScreen> {
         _errorMessage = 'Error: $e';
         _isProcessing = false;
       });
-      print('Error during prediction: $e');
+      debugPrint('Error during prediction: $e');
     }
   }
   

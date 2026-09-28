@@ -62,3 +62,7 @@ backend/serviceAccountKey.json
 *.wav
 __pycache__/
 backend/audio_recordings/
+backend/recordings/
+*.db
+backend/*.db
+

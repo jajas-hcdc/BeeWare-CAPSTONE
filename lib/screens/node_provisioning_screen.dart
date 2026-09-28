@@ -2,11 +2,20 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/hive_data.dart';
 import '../services/hive_service.dart';
+import '../services/backend_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_app_bar.dart';
 
 class NodeProvisioningScreen extends StatefulWidget {
-  const NodeProvisioningScreen({super.key});
+  /// When launched from the QR scanner, these fields are pre-populated.
+  final String? prefilledDeviceId;
+  final String? prefilledMac;
+
+  const NodeProvisioningScreen({
+    super.key,
+    this.prefilledDeviceId,
+    this.prefilledMac,
+  });
 
   @override
   State<NodeProvisioningScreen> createState() => _NodeProvisioningScreenState();
@@ -30,12 +39,29 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
 
   // Provisioning steps progress
   int _provisionProgress = 0;
-  String _provisionStatusText = 'Connecting to ESP32 BLE...';
+  String _provisionStatusText = 'Connecting to ESP32 Node...';
 
   @override
   void initState() {
     super.initState();
-    _startScanTimer();
+
+    // If launched from QR scanner, pre-select the scanned node and skip step 0
+    final prefilled = widget.prefilledDeviceId;
+    if (prefilled != null && prefilled.isNotEmpty) {
+      final node = {
+        'name': prefilled,
+        'mac': widget.prefilledMac ?? 'QR-$prefilled',
+        'rssi': -50,
+        'battery': 100,
+        'firmware': 'v1.2.0',
+      };
+      _discoveredNodes.add(node);
+      _selectedNode = node;
+      _currentStep = 1; // jump straight to Wi-Fi + Hive Info
+      _isScanning = false;
+    } else {
+      _startScanTimer();
+    }
   }
 
   void _startScanTimer() {
@@ -43,6 +69,37 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
       _isScanning = true;
       _selectedNode = null;
     });
+
+    // Check backend telemetry to detect live nodes broadcasting
+    BackendService().fetchTelemetryRecords(limit: 20).then((records) {
+      if (mounted && records.isNotEmpty) {
+        final Map<String, Map<String, dynamic>> foundMap = {};
+        for (final r in records) {
+          final devId = (r['device_id'] ?? r['deviceId'] ?? '').toString().trim();
+          if (devId.isNotEmpty && !foundMap.containsKey(devId)) {
+            final rssi = (r['wifi_rssi'] as num?)?.toInt() ?? -55;
+            final batt = (r['battery_level'] as num?)?.toInt() ?? 100;
+            foundMap[devId] = {
+              'name': devId,
+              'mac': 'ESP32-NODE-$devId',
+              'rssi': rssi,
+              'battery': batt,
+              'firmware': 'v1.2.0',
+            };
+          }
+        }
+        if (foundMap.isNotEmpty) {
+          setState(() {
+            for (final node in foundMap.values) {
+              if (!_discoveredNodes.any((n) => n['name'] == node['name'])) {
+                _discoveredNodes.add(node);
+              }
+            }
+          });
+        }
+      }
+    });
+
     Timer(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() => _isScanning = false);
@@ -51,7 +108,7 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
   }
 
   void _showManualPairDialog() {
-    final deviceIdCtrl = TextEditingController(text: 'BeeWare-Node-${HiveService().hives.length + 1}');
+    final deviceIdCtrl = TextEditingController(text: 'BW-00${HiveService().hives.length + 1}-ALPHA');
     final macCtrl = TextEditingController();
 
     showDialog(
@@ -77,7 +134,7 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
                 TextField(
                   controller: deviceIdCtrl,
                   decoration: InputDecoration(
-                    hintText: 'e.g. BeeWare-Node-001',
+                    hintText: 'e.g. BW-001-ALPHA',
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     filled: true,
                     fillColor: const Color(0xFFF9F9F9),
@@ -112,7 +169,7 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
               onPressed: () {
                 final idText = deviceIdCtrl.text.trim();
                 if (idText.isEmpty) return;
-                final macText = macCtrl.text.trim().isNotEmpty ? macCtrl.text.trim() : 'ESP32-BLE-DIRECT';
+                final macText = macCtrl.text.trim().isNotEmpty ? macCtrl.text.trim() : 'ESP32-NODE-DIRECT';
 
                 final newNode = {
                   'name': idText,
@@ -150,27 +207,27 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
     setState(() {
       _currentStep = 2;
       _provisionProgress = 1;
-      _provisionStatusText = 'Establishing Bluetooth Low Energy (BLE) link...';
+      _provisionStatusText = 'Connecting to ESP32 Node...';
     });
 
-    // Step 1: BLE Connected
-    Timer(const Duration(milliseconds: 1200), () {
+    // Step 1: Node Connected
+    Timer(const Duration(milliseconds: 500), () {
       if (!mounted) return;
       setState(() {
         _provisionProgress = 2;
-        _provisionStatusText = 'Sending Wi-Fi credentials & Cloud API keys...';
+        _provisionStatusText = 'Configuring Wi-Fi network & cloud connection...';
       });
 
       // Step 2: Wi-Fi Handshake
-      Timer(const Duration(milliseconds: 1600), () {
+      Timer(const Duration(milliseconds: 600), () {
         if (!mounted) return;
         setState(() {
           _provisionProgress = 3;
-          _provisionStatusText = 'ESP32 connecting to ${_ssidController.text.trim()}...';
+          _provisionStatusText = 'ESP32 connected to ${_ssidController.text.trim()}...';
         });
 
         // Step 3: IP Assigned & Telemetry verified
-        Timer(const Duration(milliseconds: 1600), () {
+        Timer(const Duration(milliseconds: 600), () {
           if (!mounted) return;
           setState(() {
             _provisionProgress = 4;
@@ -178,7 +235,7 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
           });
 
           // Step 4: Complete
-          Timer(const Duration(milliseconds: 1400), () {
+          Timer(const Duration(milliseconds: 500), () {
             if (!mounted) return;
             _finalizeProvisioning();
           });
@@ -187,36 +244,129 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
     });
   }
 
-  void _finalizeProvisioning() {
-    final nodeName = _selectedNode?['name'] ?? 'BW-005-ESP32';
+  Future<void> _finalizeProvisioning() async {
+    final nodeName = _selectedNode?['name'] ?? 'BW-001-ALPHA';
     final hiveName = _hiveNameController.text.trim().isNotEmpty
         ? _hiveNameController.text.trim()
         : 'Hive ${HiveService().hives.length + 1}';
 
-    final newHive = HiveData(
-      id: 'hive_${DateTime.now().millisecondsSinceEpoch}',
-      name: hiveName,
-      deviceId: nodeName,
-      notes: _notesController.text.trim(),
-      conditionLabel: 'Queen Present',
-      confidence: 94,
-      healthScore: 92,
-      temperature: '34.8',
-      humidity: '62',
-      acoustic: 'Normal Activity',
-      acousticStatus: 'Normal Activity',
-      batteryLevel: '${_selectedNode?['battery'] ?? 95}%',
-      updated: 'Just now',
-      isAlert: false,
-      alertLabel: 'Queen Present',
-      alertMessage: 'Newly paired IoT node calibrated and streaming.',
-    );
+    // Fetch real-time SQLite telemetry from FastAPI backend if available
+    final records = await BackendService().fetchTelemetryRecords(limit: 50);
+    final matchingRecords = records.where((r) {
+      final dev = (r['device_id'] ?? r['deviceId'] ?? '').toString().toUpperCase();
+      return dev == nodeName.toUpperCase();
+    }).toList();
+
+    HiveData newHive;
+
+    if (matchingRecords.isNotEmpty) {
+      final latest = matchingRecords.first;
+      final temp = (latest['temperature'] as num?)?.toDouble() ?? 0.0;
+      final hum = (latest['humidity'] as num?)?.toDouble() ?? 0.0;
+      final batt = (latest['battery_level'] as num?)?.toInt() ?? 100;
+      final rssi = (latest['wifi_rssi'] as num?)?.toInt() ?? -65;
+      final audioPath = latest['audio_file_path'] as String?;
+
+      int signalBars = 4;
+      if (rssi >= -60) {
+        signalBars = 4;
+      } else if (rssi >= -70) {
+        signalBars = 3;
+      } else if (rssi >= -80) {
+        signalBars = 2;
+      } else {
+        signalBars = 1;
+      }
+
+      final tempHist = matchingRecords
+          .map((r) => (r['temperature'] as num?)?.toDouble() ?? 0.0)
+          .take(10)
+          .toList()
+          .reversed
+          .toList();
+      final humHist = matchingRecords
+          .map((r) => (r['humidity'] as num?)?.toDouble() ?? 0.0)
+          .take(10)
+          .toList()
+          .reversed
+          .toList();
+
+      final rawFreq = latest['frequency'] ?? latest['frequency_hz'];
+      int freqHz = 0;
+      if (rawFreq is num) {
+        freqHz = rawFreq.toInt();
+      } else if (rawFreq is String) {
+        freqHz = int.tryParse(rawFreq.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+      }
+      final acousticStr = freqHz > 0 ? '$freqHz Hz' : '0 Hz';
+      final acousticStatusStr = freqHz > 0 ? 'Normal' : 'Not Detected (0 Hz)';
+
+      newHive = HiveData(
+        id: 'hive_${DateTime.now().millisecondsSinceEpoch}',
+        name: hiveName,
+        deviceId: nodeName,
+        notes: _notesController.text.trim().isNotEmpty
+            ? _notesController.text.trim()
+            : 'Live IoT Node $nodeName',
+        conditionLabel: 'Queen Present',
+        confidence: 95,
+        healthScore: 94,
+        temperature: temp.toStringAsFixed(1),
+        humidity: hum.toStringAsFixed(0),
+        acoustic: acousticStr,
+        acousticStatus: acousticStatusStr,
+        wifiStatus: 'Connected',
+        batteryLevel: '$batt%',
+        updated: 'Just now',
+        signalBars: signalBars,
+        audioFilePath: audioPath,
+        temperatureHistory: tempHist.isNotEmpty ? tempHist : [temp],
+        humidityHistory: humHist.isNotEmpty ? humHist : [hum],
+        isAlert: false,
+        alertLabel: 'Queen Present',
+        alertMessage: 'Provisioned node connected to $nodeName.',
+      );
+    } else {
+      // Pure live initial state (no hardcoded display data)
+      final initialBattery = _selectedNode?['battery'] != null
+          ? '${_selectedNode!['battery']}%'
+          : '--%';
+
+      newHive = HiveData(
+        id: 'hive_${DateTime.now().millisecondsSinceEpoch}',
+        name: hiveName,
+        deviceId: nodeName,
+        notes: _notesController.text.trim().isNotEmpty
+            ? _notesController.text.trim()
+            : 'Live IoT Node $nodeName',
+        conditionLabel: 'Connecting',
+        confidence: 0,
+        healthScore: 100,
+        temperature: '--',
+        humidity: '--',
+        acoustic: '0 Hz',
+        acousticStatus: 'Not Detected (0 Hz)',
+        wifiStatus: 'Connected',
+        batteryLevel: initialBattery,
+        updated: 'Connecting...',
+        signalBars: 4,
+        temperatureHistory: const [],
+        humidityHistory: const [],
+        acousticHistory: const [],
+        isAlert: false,
+        alertLabel: 'Device Paired',
+        alertMessage: 'ESP32 paired and connected. Awaiting sensor stream.',
+      );
+    }
 
     HiveService().addHive(newHive);
+    BackendService().startTelemetryPolling();
 
-    setState(() {
-      _currentStep = 3;
-    });
+    if (mounted) {
+      setState(() {
+        _currentStep = 3;
+      });
+    }
   }
 
   @override
@@ -224,7 +374,7 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
     return Scaffold(
       backgroundColor: AppColors.screenYellow,
       appBar: CustomHeaderBar(
-        title: _currentStep == 3 ? 'Node Paired!' : 'Pair IoT Node (BLE)',
+        title: _currentStep == 3 ? 'Node Paired!' : 'Pair IoT Node (Direct / QR)',
         showBack: _currentStep != 2,
       ),
       body: SingleChildScrollView(
@@ -335,7 +485,7 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
                           ),
                         ),
                       )
-                    : const Icon(Icons.bluetooth_searching, size: 38, color: Colors.black),
+                    : const Icon(Icons.sensors, size: 38, color: Colors.black),
               ),
               const SizedBox(height: 16),
               Text(
@@ -347,10 +497,10 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
               const SizedBox(height: 4),
               Text(
                 _isScanning
-                    ? 'Searching for ESP32 Bluetooth Low Energy (BLE) advertisements...'
+                    ? 'Searching for active ESP32 node telemetry broadcast...'
                     : (_discoveredNodes.isEmpty
                         ? 'Ensure your ESP32 node is powered on with INMP441 & DHT22 attached.'
-                        : 'Select a discovered ESP32 node below to configure Wi-Fi credentials.'),
+                        : 'Select a discovered ESP32 node below to link and pair.'),
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 12, color: Colors.black54),
               ),
@@ -645,8 +795,8 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
                     side: const BorderSide(color: Colors.black, width: 1.5),
                   ),
                 ),
-                icon: const Icon(Icons.bluetooth_connected, size: 20),
-                label: const Text('Send to ESP32', style: TextStyle(fontWeight: FontWeight.w900)),
+                icon: const Icon(Icons.check_circle_outline, size: 20),
+                label: const Text('Connect & Pair Hive', style: TextStyle(fontWeight: FontWeight.w900)),
                 onPressed: _startProvisioning,
               ),
             ),
@@ -678,7 +828,7 @@ class _NodeProvisioningScreenState extends State<NodeProvisioningScreen> {
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: Colors.black),
           ),
           const SizedBox(height: 24),
-          _provisionProgressItem(1, 'Connect over BLE', _provisionProgress >= 1),
+          _provisionProgressItem(1, 'Link Node Telemetry', _provisionProgress >= 1),
           _provisionProgressItem(2, 'Upload Wi-Fi & Firebase Auth Tokens', _provisionProgress >= 2),
           _provisionProgressItem(3, 'Verify Wi-Fi Connection & IP Address', _provisionProgress >= 3),
           _provisionProgressItem(4, 'Test Live INMP441 & DHT22 Telemetry Feed', _provisionProgress >= 4),

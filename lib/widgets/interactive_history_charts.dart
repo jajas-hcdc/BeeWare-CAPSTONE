@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import '../models/hive_data.dart';
+import '../services/audio_service.dart';
 import '../services/export_service.dart';
 import '../theme/app_theme.dart';
 
@@ -18,63 +19,71 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
   int _selectedTimeframe = 1; // 0: 24H, 1: 7D, 2: 30D
   final List<String> _timeframeLabels = ['24 Hours', '7 Days', '30 Days'];
 
-  List<String> get _currentDates {
+  @override
+  void initState() {
+    super.initState();
+    AudioService().fetchRecordingsForDevice(widget.hive.deviceId);
+  }
+
+  List<double> _sliceForTimeframe(List<double> list) {
+    if (list.isEmpty) return [];
     if (_selectedTimeframe == 0) {
-      return [
-        '00:00', '02:00', '04:00', '06:00', '08:00', '10:00',
-        '12:00', '14:00', '16:00', '18:00', '20:00', '22:00', '23:59'
-      ];
+      return list.length > 12 ? list.sublist(list.length - 12) : list;
     } else if (_selectedTimeframe == 1) {
-      return [
-        'May 10', 'May 11', 'May 12', 'May 13', 'May 14', 'May 15', 'May 16',
-        'May 17', 'May 18', 'May 19', 'May 20', 'May 21', 'May 22', 'May 23'
-      ];
+      return list.length > 20 ? list.sublist(list.length - 20) : list;
     } else {
-      return [
-        'May 01', 'May 03', 'May 05', 'May 07', 'May 09', 'May 11',
-        'May 13', 'May 15', 'May 17', 'May 19', 'May 21', 'May 23',
-        'May 25', 'May 27', 'May 29', 'May 31'
-      ];
+      return list;
     }
+  }
+
+  List<String> _sliceDatesForTimeframe(List<String> list) {
+    if (list.isEmpty) return [];
+    if (_selectedTimeframe == 0) {
+      return list.length > 12 ? list.sublist(list.length - 12) : list;
+    } else if (_selectedTimeframe == 1) {
+      return list.length > 20 ? list.sublist(list.length - 20) : list;
+    } else {
+      return list;
+    }
+  }
+
+  List<String> get _currentDates {
+    final dates = widget.hive.historyDates;
+    if (dates.isNotEmpty) {
+      return _sliceDatesForTimeframe(dates);
+    }
+    if (widget.hive.updated.isNotEmpty && !widget.hive.updated.toLowerCase().contains('connect')) {
+      return [widget.hive.updated];
+    }
+    return ['Live'];
   }
 
   List<double> get _currentTemperature {
-    if (_selectedTimeframe == 0) {
-      return [33.5, 33.7, 34.0, 34.2, 34.6, 35.1, 35.4, 35.2, 34.9, 34.4, 34.1, 33.8, 33.6];
-    } else if (_selectedTimeframe == 1) {
-      return [34.0, 34.5, 35.0, 34.2, 34.8, 35.1, 34.6, 34.4, 34.7, 35.0, 34.8, 34.3, 34.5, 34.2];
-    } else {
-      return [
-        33.8, 34.1, 34.4, 34.6, 34.9, 35.2, 35.0, 34.7,
-        34.3, 34.5, 34.8, 35.1, 34.9, 34.6, 34.4, 34.2
-      ];
+    final hist = widget.hive.temperatureHistory;
+    if (hist.isNotEmpty) {
+      return _sliceForTimeframe(hist);
     }
+    final cur = double.tryParse(widget.hive.temperature.replaceAll('°C', '').trim());
+    if (cur != null) return [cur];
+    return [];
   }
 
   List<double> get _currentHumidity {
-    if (_selectedTimeframe == 0) {
-      return [67, 68, 65, 63, 60, 58, 56, 57, 60, 62, 65, 66, 67];
-    } else if (_selectedTimeframe == 1) {
-      return [60, 62, 65, 64, 63, 65, 66, 64, 63, 61, 62, 64, 65, 64];
-    } else {
-      return [
-        62, 63, 65, 66, 64, 62, 60, 63,
-        65, 64, 62, 63, 65, 64, 63, 64
-      ];
+    final hist = widget.hive.humidityHistory;
+    if (hist.isNotEmpty) {
+      return _sliceForTimeframe(hist);
     }
+    final cur = double.tryParse(widget.hive.humidity.replaceAll('%', '').trim());
+    if (cur != null) return [cur];
+    return [];
   }
 
   List<double> get _currentAcoustic {
-    if (_selectedTimeframe == 0) {
-      return [40, 42, 45, 50, 56, 62, 65, 60, 55, 52, 48, 44, 42];
-    } else if (_selectedTimeframe == 1) {
-      return [50, 45, 66, 70, 60, 50, 55, 52, 48, 62, 68, 56, 50, 54];
-    } else {
-      return [
-        52, 48, 62, 68, 56, 50, 54, 52,
-        49, 53, 58, 64, 57, 52, 50, 53
-      ];
+    final hist = widget.hive.acousticHistory;
+    if (hist.isNotEmpty) {
+      return _sliceForTimeframe(hist);
     }
+    return [];
   }
 
   @override
@@ -82,42 +91,59 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Timeframe Selector & Export Bar
+        // Timeframe Selector (Swipeable) & Export Bar
         Row(
           children: [
             Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.black12),
-                ),
-                child: Row(
-                  children: List.generate(_timeframeLabels.length, (index) {
-                    final isSelected = index == _selectedTimeframe;
-                    return Expanded(
-                      child: GestureDetector(
-                        onTap: () => setState(() => _selectedTimeframe = index),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          decoration: BoxDecoration(
-                            color: isSelected ? const Color(0xFFFFCC00) : Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            _timeframeLabels[index],
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
-                              color: Colors.black,
+              child: GestureDetector(
+                onHorizontalDragEnd: (details) {
+                  final velocity = details.primaryVelocity ?? 0;
+                  if (velocity < -150) {
+                    // Swipe left -> advance timeframe
+                    if (_selectedTimeframe < _timeframeLabels.length - 1) {
+                      setState(() => _selectedTimeframe++);
+                    }
+                  } else if (velocity > 150) {
+                    // Swipe right -> previous timeframe
+                    if (_selectedTimeframe > 0) {
+                      setState(() => _selectedTimeframe--);
+                    }
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.black12),
+                  ),
+                  child: Row(
+                    children: List.generate(_timeframeLabels.length, (index) {
+                      final isSelected = index == _selectedTimeframe;
+                      return Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _selectedTimeframe = index),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            decoration: BoxDecoration(
+                              color: isSelected ? const Color(0xFFFFCC00) : Colors.transparent,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              _timeframeLabels[index],
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
+                                color: Colors.black,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    );
-                  }),
+                      );
+                    }),
+                  ),
                 ),
               ),
             ),
@@ -181,6 +207,10 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
         // 4. AI Colony Condition Timeline
         _buildTimelineCard(),
+        const SizedBox(height: 16),
+
+        // 5. Recent Hive Audio Recordings (Last 5)
+        _buildAudioRecordingsCard(),
       ],
     );
   }
@@ -226,9 +256,40 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
   // ================= TEMPERATURE CARD =================
   Widget _buildTemperatureCard() {
-    final temps = _currentTemperature;
+    final rawTemps = _currentTemperature;
     final dates = _currentDates;
-    final avgTemp = (temps.reduce((a, b) => a + b) / temps.length).toStringAsFixed(1);
+
+    if (rawTemps.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(20.0),
+        decoration: AppStyles.cardDecoration(),
+        child: Column(
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.thermostat_outlined, size: 20, color: Color(0xFFE65100)),
+                SizedBox(width: 6),
+                Text(
+                  'Temperature History (°C)',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.black),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Icon(Icons.sensors_outlined, size: 36, color: Colors.black26),
+            const SizedBox(height: 8),
+            Text(
+              'Awaiting live temperature data from ${widget.hive.deviceId}...',
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final temps = rawTemps.length == 1 ? [rawTemps[0], rawTemps[0]] : rawTemps;
+    final chartDates = dates.length == 1 ? [dates[0], dates[0]] : dates;
+    final avgTemp = (rawTemps.reduce((a, b) => a + b) / rawTemps.length).toStringAsFixed(1);
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -280,7 +341,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           const SizedBox(height: 14),
 
           _buildScrollableChart(
-            dataLength: dates.length,
+            dataLength: chartDates.length,
             height: 160,
             chart: LineChart(
               LineChartData(
@@ -316,11 +377,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                       interval: 1,
                       getTitlesWidget: (val, meta) {
                         final idx = val.toInt();
-                        if (idx >= 0 && idx < dates.length) {
+                        if (idx >= 0 && idx < chartDates.length) {
                           return Padding(
                             padding: const EdgeInsets.only(top: 6),
                             child: Text(
-                              dates[idx],
+                              chartDates[idx],
                               style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
                             ),
                           );
@@ -336,7 +397,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 lineBarsData: [
                   LineChartBarData(
                     spots: List.generate(temps.length, (i) => FlSpot(i.toDouble(), temps[i])),
-                    isCurved: true,
+                    isCurved: temps.length > 2,
                     curveSmoothness: 0.35,
                     color: const Color(0xFFE65100),
                     barWidth: 3,
@@ -376,9 +437,40 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
   // ================= HUMIDITY CARD =================
   Widget _buildHumidityCard() {
-    final hums = _currentHumidity;
+    final rawHums = _currentHumidity;
     final dates = _currentDates;
-    final avgHum = (hums.reduce((a, b) => a + b) / hums.length).toStringAsFixed(0);
+
+    if (rawHums.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(20.0),
+        decoration: AppStyles.cardDecoration(),
+        child: Column(
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.water_drop_outlined, size: 20, color: Color(0xFF0288D1)),
+                SizedBox(width: 6),
+                Text(
+                  'Relative Humidity (%)',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.black),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Icon(Icons.water_outlined, size: 36, color: Colors.black26),
+            const SizedBox(height: 8),
+            Text(
+              'Awaiting live humidity data from ${widget.hive.deviceId}...',
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final hums = rawHums.length == 1 ? [rawHums[0], rawHums[0]] : rawHums;
+    final chartDates = dates.length == 1 ? [dates[0], dates[0]] : dates;
+    final avgHum = (rawHums.reduce((a, b) => a + b) / rawHums.length).toStringAsFixed(0);
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -415,7 +507,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           const SizedBox(height: 14),
 
           _buildScrollableChart(
-            dataLength: dates.length,
+            dataLength: chartDates.length,
             height: 150,
             chart: LineChart(
               LineChartData(
@@ -447,11 +539,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                       interval: 1,
                       getTitlesWidget: (val, meta) {
                         final idx = val.toInt();
-                        if (idx >= 0 && idx < dates.length) {
+                        if (idx >= 0 && idx < chartDates.length) {
                           return Padding(
                             padding: const EdgeInsets.only(top: 6),
                             child: Text(
-                              dates[idx],
+                              chartDates[idx],
                               style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
                             ),
                           );
@@ -467,7 +559,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 lineBarsData: [
                   LineChartBarData(
                     spots: List.generate(hums.length, (i) => FlSpot(i.toDouble(), hums[i])),
-                    isCurved: true,
+                    isCurved: hums.length > 2,
                     curveSmoothness: 0.35,
                     color: const Color(0xFF0288D1),
                     barWidth: 3,
@@ -496,8 +588,39 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
   // ================= ACOUSTIC CARD =================
   Widget _buildAcousticCard() {
-    final acoustics = _currentAcoustic;
+    final rawAcoustics = _currentAcoustic;
     final dates = _currentDates;
+
+    if (rawAcoustics.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(20.0),
+        decoration: AppStyles.cardDecoration(),
+        child: Column(
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.graphic_eq, size: 20, color: AppColors.healthyGreen),
+                SizedBox(width: 6),
+                Text(
+                  'Acoustic Energy & Frequency (dB)',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.black),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Icon(Icons.mic_none_outlined, size: 36, color: Colors.black26),
+            const SizedBox(height: 8),
+            Text(
+              'Awaiting audio stream packets from ${widget.hive.deviceId}...',
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final acoustics = rawAcoustics.length == 1 ? [rawAcoustics[0], rawAcoustics[0]] : rawAcoustics;
+    final chartDates = dates.length == 1 ? [dates[0], dates[0]] : dates;
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -523,7 +646,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           const SizedBox(height: 14),
 
           _buildScrollableChart(
-            dataLength: dates.length,
+            dataLength: chartDates.length,
             height: 150,
             chart: BarChart(
               BarChartData(
@@ -553,11 +676,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                       reservedSize: 22,
                       getTitlesWidget: (val, meta) {
                         final idx = val.toInt();
-                        if (idx >= 0 && idx < dates.length) {
+                        if (idx >= 0 && idx < chartDates.length) {
                           return Padding(
                             padding: const EdgeInsets.only(top: 6),
                             child: Text(
-                              dates[idx],
+                              chartDates[idx],
                               style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
                             ),
                           );
@@ -597,6 +720,15 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
   // ================= TIMELINE CARD =================
   Widget _buildTimelineCard() {
+    final timeline = widget.hive.conditionTimeline.isNotEmpty
+        ? widget.hive.conditionTimeline
+        : [
+            {
+              'date': widget.hive.updated,
+              'status': widget.hive.conditionLabel,
+            }
+          ];
+
     return Container(
       padding: const EdgeInsets.all(16.0),
       decoration: AppStyles.cardDecoration(),
@@ -611,9 +743,9 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           Wrap(
             spacing: 10,
             runSpacing: 10,
-            children: widget.hive.conditionTimeline.map((item) {
-              final status = item['status'] ?? 'Queen Present';
-              final date = item['date'] ?? '';
+            children: timeline.map((item) {
+              final status = item['status'] ?? widget.hive.conditionLabel;
+              final date = item['date'] ?? widget.hive.updated;
               Color pillBg;
               Color pillText;
 
@@ -665,6 +797,225 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           ),
         ],
       ),
+    );
+  }
+
+  // ================= 5. RECENT HIVE AUDIO RECORDINGS (LAST 5) =================
+  Widget _buildAudioRecordingsCard() {
+    return AnimatedBuilder(
+      animation: AudioService(),
+      builder: (context, _) {
+        final audioService = AudioService();
+        final recordings = audioService.getCachedRecordings(widget.hive.deviceId);
+        final isPlaying = audioService.isPlaying;
+        final activeId = audioService.activePlayingId;
+
+        return Container(
+          padding: const EdgeInsets.all(16.0),
+          decoration: AppStyles.cardDecoration(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.headphones_outlined, size: 20, color: Colors.black87),
+                      SizedBox(width: 8),
+                      Text(
+                        'Recent Hive Buzz Recordings',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.black),
+                      ),
+                    ],
+                  ),
+                  InkWell(
+                    onTap: () {
+                      audioService.fetchRecordingsForDevice(widget.hive.deviceId);
+                    },
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.refresh, size: 12, color: Colors.black54),
+                          SizedBox(width: 4),
+                          Text(
+                            'Refresh',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black54),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Up to 5 recent 3.0-second acoustic audio clips captured on boot and cycle cooldown.',
+                style: TextStyle(fontSize: 11, color: Colors.black54),
+              ),
+              const SizedBox(height: 14),
+
+              if (recordings.isEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.black12),
+                  ),
+                  child: Column(
+                    children: [
+                      const Icon(Icons.mic_none_outlined, size: 36, color: Colors.black38),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Awaiting buzz recordings from ${widget.hive.name}...',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Recordings are captured in 3-second clips whenever the ESP32 node boots up or completes a cooldown cycle.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 11, color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: recordings.length,
+                  separatorBuilder: (context, index) => const Divider(height: 16, color: Colors.black12),
+                  itemBuilder: (context, index) {
+                    final clip = recordings[index];
+                    final isThisPlaying = isPlaying && activeId == clip.id;
+
+                    Color badgeColor = AppColors.healthyGreen;
+                    Color badgeBg = AppColors.queenPresentGreenBg;
+                    if (clip.frequency == 0 || clip.condition.toLowerCase().contains('no buzz')) {
+                      badgeColor = AppColors.queenAbsentRed;
+                      badgeBg = AppColors.queenAbsentRedBg;
+                    } else if (clip.frequency >= 320 || clip.condition.toLowerCase().contains('rejected')) {
+                      badgeColor = AppColors.queenRejectedOrange;
+                      badgeBg = AppColors.queenRejectedOrangeBg;
+                    } else if (clip.condition.toLowerCase().contains('accepted')) {
+                      badgeColor = AppColors.queenAcceptedBlue;
+                      badgeBg = AppColors.queenAcceptedBlueBg;
+                    }
+
+                    return Container(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          // Play/Pause button
+                          GestureDetector(
+                            onTap: () {
+                              audioService.playRecording(clip);
+                            },
+                            child: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: isThisPlaying ? Colors.black : const Color(0xFFFFCC00),
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.12),
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                isThisPlaying ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                                color: isThisPlaying ? Colors.white : Colors.black,
+                                size: 26,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+
+                          // Metadata column
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Clip #${index + 1} • ${clip.timestamp}',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.black,
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: badgeBg,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        clip.frequency > 0 ? '${clip.frequency} Hz' : '0 Hz',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w800,
+                                          color: badgeColor,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    Text(
+                                      clip.condition,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: badgeColor,
+                                      ),
+                                    ),
+                                    const Text(' • ', style: TextStyle(fontSize: 11, color: Colors.black38)),
+                                    Text(
+                                      '${clip.temperature.toStringAsFixed(1)}°C / ${clip.humidity.toStringAsFixed(0)}%',
+                                      style: const TextStyle(fontSize: 11, color: Colors.black54),
+                                    ),
+                                    const Spacer(),
+                                    Text(
+                                      isThisPlaying ? 'Playing...' : '3.0s',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                        color: isThisPlaying ? const Color(0xFFE65100) : Colors.black45,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

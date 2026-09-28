@@ -21,13 +21,10 @@ service cloud.firestore {
       allow read, write: if isOwner(userId);
     }
 
-    // Shared Apiary Hives: all authenticated accounts can view and manage the team's hives in real time
+    // Hives collection: users can only access and manage their own hives
     match /hives/{hiveId} {
-      allow read, write: if isAuthenticated();
-      
-      match /telemetry_logs/{logId} {
-        allow read, write: if isAuthenticated();
-      }
+      allow read, update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
     }
 
     // Nested user hives (alternative subcollection pattern)

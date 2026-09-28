@@ -138,7 +138,9 @@ class FirebaseService {
       Position? position;
       try {
         position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.low,
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.low,
+          ),
         ).timeout(const Duration(seconds: 3));
       } catch (e) {
         debugPrint('Location unavailable: $e');

@@ -1,66 +1,54 @@
-# 📲 BeeWare ESP32 In-App BLE SmartConfig & Wi-Fi Provisioning Guide
+# 🐝 BeeWare ESP32 In-App Direct QR Code Hive Pairing Guide
 
-This guide explains how to pair and configure new **BeeWare IoT Hardware Nodes** directly from the mobile app using Bluetooth Low Energy (BLE), without needing a computer or Arduino IDE in the field.
+This guide explains how to pair and configure new **BeeWare IoT Hardware Nodes** directly from the mobile app by scanning the node's QR code sticker — completely eliminating the need for Bluetooth Low Energy (BLE) pairing or complex multi-step setup.
 
 ---
 
-## 🛠️ 1. How It Works
+## 🛠️ 1. Direct QR Pairing Architecture
 
 ```
-+------------------+         BLE Link         +------------------------+
-|   BeeWare App    | -----------------------> |      ESP32 Node        |
-| (Android/iOS)    |   Sends SSID & Password  | (INMP441 + DHT22)      |
-+------------------+                          +------------------------+
-                                                           |
-                                                           | Wi-Fi Connect
-                                                           v
-                                              +------------------------+
-                                              | Local 2.4GHz Wi-Fi /   |
-                                              | Mobile 4G Hotspot      |
-                                              +------------------------+
-                                                           |
-                                                           | Telemetry Sync
-                                                           v
-                                              +------------------------+
-                                              | Cloud Firestore API    |
-                                              +------------------------+
++---------------------+           Print Sticker            +------------------------+
+|  ESP32 Serial / Core| ---------------------------------> |   QR Sticker (qr.io)   |
+| (Firmware MAC ID)   |   {"deviceId":"BW-...", "mac":".."} | (On Hive Enclosure)    |
++---------------------+                                    +------------------------+
+           |                                                           |
+           | Wi-Fi Direct Push                                         | Camera Scan
+           v                                                           v
++---------------------+                                    +------------------------+
+| Firebase RTDB Cloud | <================================= |      BeeWare App       |
+| (Real-Time Stream)  |       Live Sensor Telemetry Sync   |  (Instantly Paired!)   |
++---------------------+                                    +------------------------+
 ```
 
 ---
 
-## 🚀 2. In-App Provisioning Steps (Beekeeper Flow)
+## 🚀 2. Instant Pairing Steps (Beekeeper Flow)
 
-1. Open the **BeeWare App** on your phone.
-2. Go to the **Hives** tab.
-3. Tap the **`+` (Add)** icon in the top right header.
-4. Select **"Pair IoT Node (BLE SmartConfig)"**.
-5. The radar scanner will automatically locate nearby powered-on BeeWare nodes (e.g. `BeeWare-Node-001`).
-6. Select your node and tap **"Connect & Configure Node"**.
-7. Enter:
-   - **Assigned Hive Name** (e.g. *Hive 5 - Orchard Stand*)
-   - **Local 2.4GHz Wi-Fi SSID or Mobile Hotspot Name**
-   - **Wi-Fi Password**
-   - **Apiary Location Notes**
-8. Tap **"Send to ESP32"**.
-9. The app establishes a secure Bluetooth link, uploads the network credentials, and verifies that the ESP32 connects to the internet and starts streaming data to Firebase.
-10. Once verified, the new hive immediately appears in your active hives list with live battery and sensor telemetry!
-
----
-
-## ⚡ 3. Putting ESP32 Node into BLE Pairing Mode
-
-When using a newly flashed ESP32 node in the field:
-1. **Power On** the ESP32 (via battery or USB).
-2. If no saved Wi-Fi network is detected, the node **automatically broadcasts BLE advert** with service name:
-   `BeeWare-Node-XXX`
-3. **Manual Re-pairing Trigger**:
-   - Press and hold the ESP32 **BOOT (GPIO 0)** button for **3 seconds**.
-   - The onboard blue LED will flash rapidly, indicating it is waiting for the mobile app pairing command.
+1. **Flash & Power On the ESP32 Node**:
+   - Power on the ESP32 node via 18650 Li-ion battery or USB.
+   - The ESP32 connects directly to your apiary Wi-Fi / Starlink / Mobile Hotspot.
+2. **Generate the QR Sticker**:
+   - Open the Arduino Serial Monitor at `115200` baud on first boot.
+   - Copy the printed JSON line:
+     ```json
+     {"deviceId":"BW-XXXXXX","mac":"AA:BB:CC:DD:EE:FF"}
+     ```
+   - Open [qr.io](https://qr.io), select **Text** format, and paste the JSON.
+   - Print the generated QR code and stick it onto your physical hive box enclosure.
+3. **Scan & Directly Connect in the BeeWare App**:
+   - Open the **BeeWare App** on your smartphone.
+   - Go to the **Hives** tab and tap the **`+` (Add)** icon in the top header.
+   - Point your camera at the QR sticker on the hive box.
+4. **Direct Pairing Completed**:
+   - The app instantly recognizes the node's unique ID (`BW-XXXXXX`).
+   - It links directly to the ESP32's live sensor stream (DHT22 temperature & humidity, battery, signal, and hive acoustics).
+   - The new hive is immediately created and active in your apiary dashboard!
 
 ---
 
-## 🔋 4. Migratory Beekeeping Tip (Mobile Hotspot)
-If your bee colonies are located in remote agricultural farms without permanent Wi-Fi:
-- Turn on your **Smartphone's Mobile Hotspot (2.4 GHz band)**.
-- Use the in-app pairing tool to send your phone's Hotspot name and password to the ESP32.
-- Whenever you visit the apiary, the ESP32 will automatically connect to your phone's hotspot and upload all cached telemetry logs!
+## 🔋 3. Migratory Beekeeping Tip (Mobile Hotspot & Starlink)
+
+For remote agricultural fields without fixed broadband:
+- Set your **Smartphone's Mobile Hotspot** or **Starlink Wi-Fi** SSID and password once in the ESP32 firmware (`WIFI_SSID` & `WIFI_PASSWORD`).
+- Every time you visit the apiary, power on the node or hotspot.
+- All live telemetry is automatically synchronized to the cloud and your mobile app.
