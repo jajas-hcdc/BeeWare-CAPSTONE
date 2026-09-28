@@ -24,8 +24,8 @@ class BackendService {
     if (_customBaseUrl != null && _customBaseUrl!.isNotEmpty) {
       return _customBaseUrl!;
     }
-    // Default backend URL — 0.0.0.0 binds to all interfaces on the host machine
-    return 'http://0.0.0.0:8000';
+    // Default backend URL hosted on Render.com
+    return 'https://beeware-capstone-bu85.onrender.com';
   }
 
   set baseUrl(String url) {
