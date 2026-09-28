@@ -254,25 +254,25 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
 
   // Determine Queen and Colony Condition from acoustics & temperature
   String conditionLabel = "Queen Present";
-  int confidenceVal = 92;
+  int confidenceVal = 95;
   int healthScoreVal = 95;
 
-  if (freqHz == 0) {
+  if (freqHz == 0 || freqHz < 50) {
     conditionLabel = "No Buzz Detected";
     confidenceVal = 60;
     healthScoreVal = 30;
-  } else if (freqHz >= 320) {
-    conditionLabel = "Queen Rejected"; // High agitation buzz
-    confidenceVal = 85;
-    healthScoreVal = 40;
-  } else if (freqHz > 0 && freqHz < 120) {
-    conditionLabel = "Queen Absent";   // Low queenless roar / distress
-    confidenceVal = 88;
-    healthScoreVal = 45;
-  } else if (freqHz >= 200 && freqHz <= 260) {
-    conditionLabel = "Queen Accepted"; // Normal piping harmony
+  } else if (freqHz >= 50 && freqHz <= 260) {
+    conditionLabel = "Queen Present"; // Normal worker hum harmonics (50-260 Hz)
     confidenceVal = 95;
-    healthScoreVal = 98;
+    healthScoreVal = 95;
+  } else if (freqHz > 320) {
+    conditionLabel = "Queen Absent";   // Queenless roar / distress (> 320 Hz)
+    confidenceVal = 88;
+    healthScoreVal = 40;
+  } else {
+    conditionLabel = "Queen Present";
+    confidenceVal = 85;
+    healthScoreVal = 90;
   }
 
   String payload = "{";
@@ -351,10 +351,9 @@ void uploadAudioRecordingToFirebase(float temp, float hum, int freqHz) {
 
   String deviceId = getDeviceId();
   String condition = "Queen Present";
-  if (freqHz == 0) condition = "No Buzz Detected";
-  else if (freqHz >= 320) condition = "Queen Rejected";
-  else if (freqHz < 120) condition = "Queen Absent";
-  else if (freqHz >= 200 && freqHz <= 260) condition = "Queen Accepted";
+  if (freqHz == 0 || freqHz < 50) condition = "No Buzz Detected";
+  else if (freqHz >= 50 && freqHz <= 260) condition = "Queen Present";
+  else if (freqHz > 320) condition = "Queen Absent";
 
   size_t totalSamples = (size_t)(SAMPLE_RATE * RECORD_TIME_SECONDS); // 48,000 samples for 3.0s
   size_t totalB64Chars = (totalSamples * sizeof(int16_t) * 4) / 3;   // 128,000 chars

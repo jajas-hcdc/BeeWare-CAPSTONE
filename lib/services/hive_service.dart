@@ -292,7 +292,7 @@ class HiveService extends ChangeNotifier {
       String? condLabel = (latest['conditionLabel'] ?? latest['queen_status']) as String?;
       if (!hasAcoustic && (condLabel == null || condLabel == 'Queen Present' || condLabel == 'Normal')) {
         condLabel = 'No Buzz Detected';
-      } else if (hasAcoustic && freqHz >= 50 && freqHz <= 260 && (condLabel == null || condLabel.isEmpty || condLabel == 'Normal')) {
+      } else if (hasAcoustic && freqHz >= 50 && freqHz <= 260) {
         // A frequency between 50 to 260 Hz combined with standard hive harmonics indicates Queen Present
         condLabel = 'Queen Present';
       }
