@@ -31,6 +31,10 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+**/build/
+android/build/
+.gradle/
+**/android/.gradle/
 /coverage/
 flutter/
 .packages
@@ -56,6 +60,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/app/build
 
 backend/.env
 backend/serviceAccountKey.json
