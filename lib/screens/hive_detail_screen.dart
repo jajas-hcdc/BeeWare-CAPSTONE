@@ -885,26 +885,45 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(14.0),
-                decoration: AppStyles.cardDecoration(),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Device Battery', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 10),
-                    Row(
+              child: Builder(
+                builder: (context) {
+                  final isPluggedIn = _hive.batteryLevel.toLowerCase().contains('plug');
+                  return Container(
+                    padding: const EdgeInsets.all(14.0),
+                    decoration: AppStyles.cardDecoration(),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.battery_5_bar, size: 28, color: Colors.black),
-                        const SizedBox(width: 6),
                         Text(
-                          _hive.batteryLevel,
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+                          isPluggedIn ? 'Power Source' : 'Device Battery',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Icon(
+                              isPluggedIn ? Icons.power_rounded : Icons.battery_5_bar,
+                              size: 28,
+                              color: isPluggedIn ? const Color(0xFF2E7D32) : Colors.black,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                _hive.batteryLevel,
+                                style: TextStyle(
+                                  fontSize: isPluggedIn ? 14 : 16,
+                                  fontWeight: FontWeight.w900,
+                                  color: isPluggedIn ? const Color(0xFF2E7D32) : Colors.black,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
           ],

@@ -355,7 +355,14 @@ class HiveService extends ChangeNotifier {
       final latest = devRecords.first;
       final temp = parseNumToDouble(latest['temperature'], 0.0);
       final hum = parseNumToDouble(latest['humidity'], 0.0);
+      final powerSource = (latest['power_source'] ?? latest['battery_status'] ?? latest['powerSource'])?.toString();
       final batt = parseNumToInt(latest['battery_level'], 100);
+      final bool isPluggedIn = powerSource?.toLowerCase().contains('plug') == true ||
+          powerSource?.toLowerCase().contains('outlet') == true ||
+          powerSource?.toLowerCase().contains('ac') == true ||
+          batt == 100 ||
+          batt == 0;
+      final String batteryStr = isPluggedIn ? 'Plugged In' : '$batt%';
       final rssi = parseNumToInt(latest['wifi_rssi'], -65);
       final audioPath = latest['audio_file_path'] as String?;
       final qrUrl = (latest['qr_code_url'] ?? latest['qr_url'] ?? latest['qrCodeUrl']) as String?;
@@ -582,7 +589,7 @@ class HiveService extends ChangeNotifier {
                       : (existing.recommendation.toLowerCase().contains('routine') && (isAbs || isRej)
                           ? 'Inspect hive immediately.'
                           : existing.recommendation))),
-          batteryLevel: '$batt%',
+          batteryLevel: batteryStr,
           wifiStatus: 'Connected',
           signalBars: signalBars,
           updated: 'Just now',
@@ -655,7 +662,7 @@ class HiveService extends ChangeNotifier {
                   : (isAcc
                       ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
                       : 'Colony is queenright and stable. Continue regular monitoring.')),
-          batteryLevel: '$batt%',
+          batteryLevel: batteryStr,
           wifiStatus: 'Connected',
           signalBars: signalBars,
           updated: 'Just now',

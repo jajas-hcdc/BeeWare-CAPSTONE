@@ -249,6 +249,8 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
   payload += "\"temperature\":" + String(temp, 1) + ",";
   payload += "\"humidity\":" + String(hum, 1) + ",";
   payload += "\"battery_level\":" + String(battery) + ",";
+  payload += "\"power_source\":\"Plugged In\",";
+  payload += "\"battery_status\":\"Plugged In\",";
   payload += "\"wifi_rssi\":" + String(rssi) + ",";
   payload += "\"sample_rate\":" + String(SAMPLE_RATE) + ",";
   payload += "\"peak_audio\":" + String(peakVal) + ",";

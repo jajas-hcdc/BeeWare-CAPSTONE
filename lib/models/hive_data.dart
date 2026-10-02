@@ -57,7 +57,7 @@ class HiveData {
     required this.acoustic,
     this.acousticStatus = 'Normal',
     this.wifiStatus = 'Connected',
-    this.batteryLevel = '90%',
+    this.batteryLevel = 'Plugged In',
     required this.updated,
     this.signalBars = 4,
     this.explanation =
@@ -341,7 +341,21 @@ class HiveData {
       acoustic: isAcousticZero ? '0 Hz' : acousticRaw,
       acousticStatus: isAcousticZero ? 'Not Detected (0 Hz)' : acousticStatusRaw,
       wifiStatus: data['wifiStatus'] ?? 'Connected',
-      batteryLevel: data['batteryLevel'] ?? '90%',
+      batteryLevel: () {
+        final raw = data['batteryLevel'] ?? data['battery_level'] ?? data['power_source'] ?? data['battery_status'];
+        if (raw == null) return 'Plugged In';
+        final str = raw.toString().trim();
+        if (str.toLowerCase().contains('plug') ||
+            str.toLowerCase().contains('outlet') ||
+            str.toLowerCase().contains('ac') ||
+            str == '100' ||
+            str == '100%' ||
+            str == '0' ||
+            str == '0%') {
+          return 'Plugged In';
+        }
+        return str.endsWith('%') ? str : '$str%';
+      }(),
       updated: data['updated'] ?? 'Just now',
       signalBars: (data['signalBars'] as num?)?.toInt() ?? 4,
       explanation: (data['explanation'] != null &&

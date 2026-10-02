@@ -127,7 +127,7 @@ class BackendService {
   }
 
   /// Starts periodic background polling of telemetry from backend
-  void startTelemetryPolling({Duration interval = const Duration(seconds: 4)}) {
+  void startTelemetryPolling({Duration interval = const Duration(seconds: 30)}) {
     if (_isPolling) return;
     _isPolling = true;
 

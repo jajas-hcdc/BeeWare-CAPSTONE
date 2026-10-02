@@ -159,8 +159,8 @@ class _MainNavigationState extends State<MainNavigation> {
     super.initState();
     _pageController = PageController(initialPage: _selectedIndex);
 
-    // Start HTTP polling for live ESP32 SQLite telemetry
-    BackendService().startTelemetryPolling(interval: const Duration(seconds: 4));
+    // Start HTTP polling for live ESP32 SQLite telemetry (30s interval to conserve data & battery)
+    BackendService().startTelemetryPolling(interval: const Duration(seconds: 30));
 
     // 0. In-app live sensor & acoustic anomaly notification banner
     _alertSub = AlertService().onAlertTriggered.listen((alert) {
