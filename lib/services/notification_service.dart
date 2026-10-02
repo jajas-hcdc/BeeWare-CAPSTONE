@@ -165,20 +165,16 @@ class NotificationService {
     _showInAppTopBanner(title, body, severity: severity);
   }
 
-  /// Displays a notification when an IoT audio recording occurs (on restart or cycle cooldown)
+  /// Displays a notification when an IoT audio recording occurs (disabled to prevent intrusive prompts on app launch)
   Future<void> showAudioRecordedNotification({
     required String deviceId,
     required String recordedTime,
     required String trigger,
     int? frequency,
   }) async {
-    final freqText = (frequency != null && frequency > 0) ? ' • $frequency Hz' : '';
-    await showNotification(
-      title: '🎤 Hive Audio Recorded ($trigger)',
-      body: '$deviceId captured a 3.0s audio clip at $recordedTime$freqText.',
-      severity: 'Info',
-      payload: 'audio_$deviceId',
-    );
+    // Disabled: Routine audio captures are saved silently in audio history
+    // and should not prompt intrusive notifications or banners.
+    return;
   }
 
   /// In-app floating drop-down banner for immediate visibility when inside the app

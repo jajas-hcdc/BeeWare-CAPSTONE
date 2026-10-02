@@ -110,7 +110,8 @@ class HiveData {
     final wifi = wifiStatus.toLowerCase();
     if (wifi.contains('disconnect') || wifi.contains('offline')) return true;
     final up = updated.toLowerCase();
-    if (up.contains('hr') || up.contains('hour') || up.contains('day') || up.contains('offline')) {
+    if (up.contains('cooldown')) return false;
+    if (up.contains('hr') || up.contains('hour') || up.contains('day') || up.contains('offline') || up.contains('ago')) {
       return true;
     }
     return false;
@@ -118,6 +119,7 @@ class HiveData {
 
   String get lastSeenText {
     if (updated.toLowerCase().contains('just now')) return 'Live';
+    if (updated.toLowerCase().contains('cooldown')) return 'In Cooldown (Cycle active)';
     return 'Last seen: $updated';
   }
 

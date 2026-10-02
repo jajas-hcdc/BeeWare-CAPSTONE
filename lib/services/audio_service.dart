@@ -9,7 +9,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/audio_recording_model.dart';
 import 'hive_service.dart';
-import 'notification_service.dart';
 
 class AudioService extends ChangeNotifier {
   static final AudioService _instance = AudioService._internal();
@@ -168,13 +167,6 @@ class AudioService extends ChangeNotifier {
       trigger: trigger,
       recordedTime: recordedTime,
       recordedDate: dateStr,
-    );
-
-    NotificationService().showAudioRecordedNotification(
-      deviceId: cleanId,
-      recordedTime: recordedTime,
-      trigger: trigger,
-      frequency: frequency,
     );
 
     final updated = [newClip, ...existing.where((c) => c.id != newClip.id)].take(5).toList();
@@ -392,13 +384,6 @@ class AudioService extends ChangeNotifier {
       trigger: trigger,
       recordedTime: timeStr,
       recordedDate: dateStr,
-    );
-
-    NotificationService().showAudioRecordedNotification(
-      deviceId: cleanId,
-      recordedTime: timeStr,
-      trigger: trigger,
-      frequency: frequency,
     );
 
     final updated = [newClip, ...existing.where((c) => c.id != newClip.id)].take(5).toList();

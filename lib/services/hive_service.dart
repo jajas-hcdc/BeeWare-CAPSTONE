@@ -521,6 +521,58 @@ class HiveService extends ChangeNotifier {
       final lastAudioTrig = (latest['last_audio_trigger'] ?? latest['lastAudioTrigger'])?.toString();
       final lastAudioEpoch = parseNumToInt(latest['last_audio_epoch'] ?? latest['last_audio_created_at'], 0);
 
+      // Dynamically compute telemetry freshness (Live vs In Cooldown vs Offline)
+      int telemetryEpoch = parseNumToInt(
+        latest['last_audio_epoch'] ??
+        latest['epoch'] ??
+        latest['created_at'] ??
+        latest['last_audio_created_at'],
+        0,
+      );
+      if (telemetryEpoch > 0 && telemetryEpoch < 1700000000) {
+        telemetryEpoch *= 1000;
+      }
+      if (telemetryEpoch == 0) {
+        final tsStr = (latest['timestamp'] ?? latest['created_at'])?.toString();
+        if (tsStr != null && tsStr.isNotEmpty) {
+          final dt = DateTime.tryParse(tsStr);
+          if (dt != null) {
+            telemetryEpoch = dt.millisecondsSinceEpoch;
+          }
+        }
+      }
+
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      String computedWifiStatus = 'Connected';
+      String computedUpdated = 'Just now';
+
+      if (telemetryEpoch > 1700000000000) {
+        final ageMs = nowMs - telemetryEpoch;
+        if (ageMs > 10 * 60 * 1000) {
+          // If no telemetry received for over 10 minutes (ESP32 cooldown is 5 min / 300s)
+          computedWifiStatus = 'Offline';
+          final ageMin = ageMs ~/ (60 * 1000);
+          if (ageMin < 60) {
+            computedUpdated = '$ageMin min ago';
+          } else if (ageMin < 1440) {
+            final ageHr = ageMin ~/ 60;
+            computedUpdated = '$ageHr hr ago';
+          } else {
+            final ageDays = ageMin ~/ 1440;
+            computedUpdated = '$ageDays days ago';
+          }
+        } else if (ageMs > 3 * 60 * 1000) {
+          computedWifiStatus = 'Connected';
+          computedUpdated = 'In Cooldown';
+        } else {
+          computedWifiStatus = 'Connected';
+          computedUpdated = 'Just now';
+        }
+      } else if (lastAudioRecTime != null && lastAudioRecTime.isNotEmpty && lastAudioRecTime != 'null') {
+        computedUpdated = lastAudioRecTime;
+      }
+      final computedBars = computedWifiStatus == 'Offline' ? 0 : signalBars;
+
       // Extract condition label & confidence if pushed by ESP32 / cloud
       String? condLabel = (latest['conditionLabel'] ?? latest['queen_status']) as String?;
       if (!hasAcoustic && (condLabel == null || condLabel == 'Queen Present' || condLabel == 'Normal')) {
@@ -590,9 +642,9 @@ class HiveService extends ChangeNotifier {
                           ? 'Inspect hive immediately.'
                           : existing.recommendation))),
           batteryLevel: batteryStr,
-          wifiStatus: 'Connected',
-          signalBars: signalBars,
-          updated: 'Just now',
+          wifiStatus: computedWifiStatus,
+          signalBars: computedBars,
+          updated: computedUpdated,
           audioFilePath: audioPath ?? existing.audioFilePath,
           qrCodeUrl: qrUrl ?? existing.qrCodeUrl,
           historyDates: datesHist.isNotEmpty ? datesHist : existing.historyDates,
@@ -663,9 +715,9 @@ class HiveService extends ChangeNotifier {
                       ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
                       : 'Colony is queenright and stable. Continue regular monitoring.')),
           batteryLevel: batteryStr,
-          wifiStatus: 'Connected',
-          signalBars: signalBars,
-          updated: 'Just now',
+          wifiStatus: computedWifiStatus,
+          signalBars: computedBars,
+          updated: computedUpdated,
           audioFilePath: audioPath,
           qrCodeUrl: qrUrl,
           historyDates: datesHist,
