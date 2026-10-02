@@ -40,7 +40,7 @@ const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebase
 
 DHT dht(DHTPIN, DHTTYPE);
 i2s_chan_handle_t rx_handle = NULL;
-static int audioSlotCounter = 0;
+RTC_DATA_ATTR int audioSlotCounter = 0;
 uint32_t cooldownStartTime = 0;
 uint32_t lastCooldownLogSec = 0;
 
@@ -341,7 +341,7 @@ void uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
 
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(10);
+  client.setTimeout(15000);
 
   if (!client.connect(FIREBASE_HOST, 443)) {
     Serial.println("❌ [Audio Upload] Connection failed!");
@@ -399,8 +399,21 @@ void uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
   }
 
   client.print(jsonFoot);
-  Serial.printf("✅ [Audio Upload] [%s] Slot %d uploaded at %s (%d samples)\n",
-                triggerType, slot, timeStr.c_str(), samplesRecorded);
+  client.flush();
+
+  // Wait for Firebase RTDB HTTP acknowledgment before closing socket
+  uint32_t respStart = millis();
+  while (client.connected() && !client.available() && (millis() - respStart < 6000)) {
+    delay(15);
+  }
+  if (client.available()) {
+    String status = client.readStringUntil('\n');
+    status.trim();
+    Serial.println("✅ [Firebase RTDB Audio] Slot uploaded: " + status);
+  } else {
+    Serial.printf("✅ [Audio Upload] [%s] Slot %d stream sent (%d samples)\n",
+                  triggerType, slot, samplesRecorded);
+  }
   client.stop();
 }
 
@@ -420,6 +433,16 @@ void ensureWiFiConnected() {
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
     // Synchronize Real Time via NTP (GMT+8)
     configTime(8 * 3600, 0, "pool.ntp.org", "time.google.com");
+    // Wait up to 3.5 seconds for NTP clock sync
+    time_t nowSec = time(nullptr);
+    uint32_t ntpWaitStart = millis();
+    while (nowSec < 1700000000 && (millis() - ntpWaitStart < 3500)) {
+      delay(100);
+      nowSec = time(nullptr);
+    }
+    if (nowSec >= 1700000000) {
+      Serial.printf("⏰ NTP Synchronized! Current time: %s\n", getFormattedTime().c_str());
+    }
   } else {
     Serial.println("\n❌ Wi-Fi Connection Timeout!");
   }

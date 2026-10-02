@@ -73,8 +73,16 @@ class AudioRecordingModel {
     String? recTime = (data['recorded_time'] ?? data['recordedTime'] ?? data['time'])?.toString();
     String? recDate = (data['recorded_date'] ?? data['recordedDate'] ?? data['date'])?.toString();
 
-    if ((recTime == null || recTime == 'Just now') && createdAt > 1700000000000) {
-      final dt = DateTime.fromMillisecondsSinceEpoch(createdAt);
+    // Check alternative fields if recTime is null or "Just now"
+    if (recTime == null || recTime.trim().isEmpty || recTime == 'Just now') {
+      final altTime = (data['last_audio_recorded_time'] ?? data['lastAudioRecordedTime'] ?? data['timestamp'])?.toString();
+      if (altTime != null && altTime.isNotEmpty && altTime != 'Just now' && altTime != 'null') {
+        recTime = altTime;
+      }
+    }
+
+    if ((recTime == null || recTime == 'Just now' || recTime.isEmpty) && createdAt > 1700000000000) {
+      final dt = DateTime.fromMillisecondsSinceEpoch(createdAt).toLocal();
       final hour = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
       final period = dt.hour >= 12 ? 'PM' : 'AM';
       final min = dt.minute.toString().padLeft(2, '0');

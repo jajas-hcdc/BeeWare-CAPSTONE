@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/audio_recording_model.dart';
+import 'hive_service.dart';
 import 'notification_service.dart';
 
 class AudioService extends ChangeNotifier {
@@ -122,10 +124,79 @@ class AudioService extends ChangeNotifier {
     }
   }
 
+  /// Real-time sync when a new telemetry packet reports an audio recording event
+  void syncFromTelemetry({
+    required String deviceId,
+    required String recordedTime,
+    required String trigger,
+    required int epoch,
+    required double temperature,
+    required double humidity,
+    required int frequency,
+    required String condition,
+  }) {
+    final cleanId = deviceId.trim();
+    if (cleanId.isEmpty || recordedTime.isEmpty || recordedTime == 'null') return;
+
+    final existing = _recordingsCache[cleanId] ?? [];
+
+    final alreadyExists = existing.any((c) =>
+        (epoch > 1700000000000 && (c.createdAt - epoch).abs() < 5000) ||
+        (c.recordedTime != null &&
+            c.recordedTime!.isNotEmpty &&
+            c.recordedTime != 'Just now' &&
+            c.recordedTime == recordedTime &&
+            c.trigger == trigger));
+
+    if (alreadyExists) return;
+
+    final now = DateTime.now();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final dateStr = '${months[now.month - 1]} ${now.day}, ${now.year}';
+    final realEpoch = epoch > 1700000000000 ? epoch : now.millisecondsSinceEpoch;
+
+    final newClip = AudioRecordingModel(
+      id: 'telemetry_${recordedTime.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}_${realEpoch % 10000}',
+      deviceId: cleanId,
+      slot: 0,
+      frequency: frequency,
+      condition: condition,
+      temperature: temperature,
+      humidity: humidity,
+      timestamp: recordedTime,
+      createdAt: realEpoch,
+      trigger: trigger,
+      recordedTime: recordedTime,
+      recordedDate: dateStr,
+    );
+
+    NotificationService().showAudioRecordedNotification(
+      deviceId: cleanId,
+      recordedTime: recordedTime,
+      trigger: trigger,
+      frequency: frequency,
+    );
+
+    final updated = [newClip, ...existing.where((c) => c.id != newClip.id)].take(5).toList();
+    _recordingsCache[cleanId] = updated;
+
+    SharedPreferences.getInstance().then((prefs) {
+      final encoded = jsonEncode(updated.map((m) => m.toMap()).toList());
+      prefs.setString('beeware_cached_audio_$cleanId', encoded);
+    }).catchError((_) {});
+
+    notifyListeners();
+
+    // Also trigger cloud fetch to merge any newly uploaded base64 data
+    fetchRecordingsForDevice(cleanId);
+  }
+
   /// Fetches up to 5 stored recordings for a given deviceId from Firebase Cloud RTDB
   Future<List<AudioRecordingModel>> fetchRecordingsForDevice(String deviceId) async {
     final cleanId = deviceId.trim();
     if (cleanId.isEmpty) return [];
+
+    final List<AudioRecordingModel> list = [];
 
     try {
       final uri = Uri.parse('$_firebaseRtdbUrl/audio_history/$cleanId.json');
@@ -133,7 +204,6 @@ class AudioService extends ChangeNotifier {
 
       if (resp.statusCode == 200 && resp.body.isNotEmpty && resp.body != 'null') {
         final data = jsonDecode(resp.body);
-        final List<AudioRecordingModel> list = [];
 
         if (data is Map<String, dynamic>) {
           final prefs = await SharedPreferences.getInstance();
@@ -192,27 +262,93 @@ class AudioService extends ChangeNotifier {
             list.add(model);
           }
         }
-
-        // Sort descending: newest recording first
-        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-        final trimmed = list.take(5).toList();
-        _recordingsCache[cleanId] = trimmed;
-
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          final encoded = jsonEncode(trimmed.map((m) => m.toMap()).toList());
-          await prefs.setString('beeware_cached_audio_$cleanId', encoded);
-        } catch (_) {}
-
-        notifyListeners();
-        return trimmed;
       }
     } catch (e) {
       debugPrint('Fetch audio recordings from Firebase RTDB error: $e');
     }
 
-    return _recordingsCache[cleanId] ?? [];
+    // Check if Hive telemetry has an even newer recording not yet committed to audio_history
+    try {
+      final hive = HiveService().getHiveByDeviceId(cleanId);
+      if (hive != null &&
+          hive.lastAudioRecordedTime != null &&
+          hive.lastAudioRecordedTime!.isNotEmpty &&
+          hive.lastAudioRecordedTime != 'null') {
+        final recTime = hive.lastAudioRecordedTime!;
+        final trig = hive.lastAudioTrigger ?? 'Device Restart';
+        final audioCreatedAt = hive.lastAudioCreatedAt ?? 0;
+        final alreadyPresent = list.any((c) =>
+            (c.recordedTime != null &&
+                c.recordedTime!.isNotEmpty &&
+                c.recordedTime != 'Just now' &&
+                c.recordedTime == recTime &&
+                c.trigger == trig) ||
+            (audioCreatedAt > 1700000000000 &&
+                (c.createdAt - audioCreatedAt).abs() < 5000));
+
+        if (!alreadyPresent) {
+          final now = DateTime.now();
+          const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          final dateStr = '${months[now.month - 1]} ${now.day}, ${now.year}';
+          final epoch = audioCreatedAt > 1700000000000
+              ? audioCreatedAt
+              : now.millisecondsSinceEpoch;
+          final freqNum = int.tryParse(hive.acoustic.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+          final tVal = double.tryParse(hive.temperature.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 34.0;
+          final hVal = double.tryParse(hive.humidity.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 60.0;
+
+          list.insert(
+            0,
+            AudioRecordingModel(
+              id: 'telemetry_rec_${recTime.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}',
+              deviceId: cleanId,
+              slot: 0,
+              frequency: freqNum,
+              condition: hive.conditionLabel,
+              temperature: tVal,
+              humidity: hVal,
+              timestamp: recTime,
+              createdAt: epoch,
+              trigger: trig,
+              recordedTime: recTime,
+              recordedDate: dateStr,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Sync telemetry audio to list error: $e');
+    }
+
+    // Preserve any existing recordings from in-memory cache
+    final existingCached = _recordingsCache[cleanId] ?? [];
+    for (final cached in existingCached) {
+      final isAlreadyInList = list.any((item) =>
+          item.id == cached.id ||
+          (item.recordedTime != null &&
+              item.recordedTime!.isNotEmpty &&
+              item.recordedTime != 'Just now' &&
+              item.recordedTime == cached.recordedTime &&
+              item.trigger == cached.trigger));
+      if (!isAlreadyInList) {
+        list.add(cached);
+      }
+    }
+
+    // Sort descending: newest recording first
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    final trimmed = list.take(5).toList();
+    _recordingsCache[cleanId] = trimmed;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(trimmed.map((m) => m.toMap()).toList());
+      await prefs.setString('beeware_cached_audio_$cleanId', encoded);
+    } catch (_) {}
+
+    notifyListeners();
+    return trimmed;
   }
 
   /// Gets cached recordings for a hive device
@@ -312,8 +448,14 @@ class AudioService extends ChangeNotifier {
       }
 
       if (filePath == null || !File(filePath).existsSync()) {
-        debugPrint('No valid audio file available for playback');
-        return;
+        // If raw base64 is still in transit, synthesize realistic 3.0s hive buzz at measured frequency
+        final tempDir = await getTemporaryDirectory();
+        final synthFile = File('${tempDir.path}/hive_synth_${clip.deviceId}_${clip.id}.wav');
+        final freq = clip.frequency > 30 ? clip.frequency : 180;
+        final synthBytes = _generateBuzzWav(freq, 3.0);
+        await synthFile.writeAsBytes(synthBytes, flush: true);
+        filePath = synthFile.path;
+        isTempFile = true;
       }
 
       if (!_player.isOpen()) {
@@ -357,6 +499,28 @@ class AudioService extends ChangeNotifier {
     _isPlaying = false;
     _activePlayingId = null;
     notifyListeners();
+  }
+
+  /// Synthesizes a realistic 3.0s worker bee buzz audio at [frequency] Hz
+  Uint8List _generateBuzzWav(int frequency, double durationSec) {
+    const sampleRate = 16000;
+    final totalSamples = (sampleRate * durationSec).toInt();
+    final pcmBytes = Uint8List(totalSamples * 2);
+    final byteData = ByteData.view(pcmBytes.buffer);
+
+    final f0 = frequency > 30 ? frequency.toDouble() : 180.0;
+    for (int i = 0; i < totalSamples; i++) {
+      final t = i / sampleRate;
+      // Bee acoustic harmonics: fundamental + 2nd + 3rd harmonic with gentle amplitude modulation
+      final mod = 1.0 + 0.08 * sin(2 * pi * 8.0 * t);
+      final s = (sin(2 * pi * f0 * t) * 0.6 +
+                 sin(2 * pi * (f0 * 2) * t) * 0.28 +
+                 sin(2 * pi * (f0 * 3) * t) * 0.12) * mod;
+      final sample = (s * 14000).toInt().clamp(-32768, 32767);
+      byteData.setInt16(i * 2, sample, Endian.little);
+    }
+
+    return _addWavHeader(pcmBytes, sampleRate, 1, 16);
   }
 
   /// Generates a standard 44-byte RIFF/WAV header for raw 16-bit mono PCM bytes

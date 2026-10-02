@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/hive_data.dart';
 import 'auth_service.dart';
 import 'connectivity_service.dart';
+import 'audio_service.dart';
 
 class HiveService extends ChangeNotifier {
   static final HiveService _instance = HiveService._internal();
@@ -596,6 +597,21 @@ class HiveService extends ChangeNotifier {
           lastAudioCreatedAt: lastAudioEpoch > 0 ? lastAudioEpoch : existing.lastAudioCreatedAt,
         );
         hasChanged = true;
+
+        if (lastAudioRecTime != null &&
+            lastAudioRecTime.isNotEmpty &&
+            lastAudioRecTime != 'null') {
+          AudioService().syncFromTelemetry(
+            deviceId: deviceId,
+            recordedTime: lastAudioRecTime,
+            trigger: lastAudioTrig ?? 'Device Restart',
+            epoch: lastAudioEpoch,
+            temperature: temp,
+            humidity: hum,
+            frequency: freqHz,
+            condition: effectiveCond,
+          );
+        }
       } else {
         // Auto-discover and create new hive from live IoT telemetry
         final String newId = 'hive_${deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_').toLowerCase()}';

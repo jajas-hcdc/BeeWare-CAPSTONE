@@ -48,8 +48,16 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     super.dispose();
   }
 
+  String? _lastKnownAudioTime;
+
   void _onHiveServiceUpdate() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final currentAudioTime = _liveHive.lastAudioRecordedTime;
+    if (currentAudioTime != null && currentAudioTime != _lastKnownAudioTime) {
+      _lastKnownAudioTime = currentAudioTime;
+      AudioService().fetchRecordingsForDevice(_liveHive.deviceId);
+    }
+    setState(() {});
   }
 
   /// Generate a step-back label for the given [stepsAgo] based on timeframe.
