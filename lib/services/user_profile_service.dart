@@ -41,7 +41,7 @@ class UserProfileService extends ChangeNotifier {
           }
         } else {
           _currentUserId = null;
-          _resetToDefaults();
+          _loadGuestProfile();
         }
       });
     } catch (e) {
@@ -57,16 +57,32 @@ class UserProfileService extends ChangeNotifier {
     }
   }
 
-  void _resetToDefaults() {
+  Future<void> _loadGuestProfile() async {
     _firestoreSub?.cancel();
-    _nickname = 'Beekeeper';
-    _selectedAvatar = 'default';
-    _customImagePath = null;
-    _selectedGender = 'MALE';
-    _selectedDob = DateTime(1999, 1, 1);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _nickname = prefs.getString('beeware_guest_nickname') ?? 'Beekeeper';
+      _selectedAvatar = prefs.getString('beeware_guest_avatar') ?? 'default';
+      _customImagePath = prefs.getString('beeware_guest_custom_image');
+      _selectedGender = prefs.getString('beeware_guest_gender') ?? 'MALE';
+      final dobMs = prefs.getInt('beeware_guest_dob');
+      if (dobMs != null) {
+        _selectedDob = DateTime.fromMillisecondsSinceEpoch(dobMs);
+      } else {
+        _selectedDob = DateTime(1999, 1, 1);
+      }
+    } catch (e) {
+      debugPrint('UserProfileService guest profile load error: $e');
+      _nickname = 'Beekeeper';
+      _selectedAvatar = 'default';
+      _customImagePath = null;
+      _selectedGender = 'MALE';
+      _selectedDob = DateTime(1999, 1, 1);
+    }
     _isInitialized = true;
     notifyListeners();
   }
+
 
   Future<void> initialize() async {
     final user = _safeCurrentUser();
@@ -74,7 +90,7 @@ class UserProfileService extends ChangeNotifier {
       _currentUserId = user.uid;
       await _loadUserProfileForUser(user);
     } else {
-      _resetToDefaults();
+      await _loadGuestProfile();
     }
   }
 

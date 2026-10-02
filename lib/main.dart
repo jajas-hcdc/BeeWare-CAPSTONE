@@ -10,6 +10,7 @@ import 'screens/hive_detail_screen.dart';
 import 'services/firebase_service.dart';
 import 'services/hive_service.dart';
 import 'services/alert_service.dart';
+import 'services/notification_service.dart';
 import 'services/user_profile_service.dart';
 import 'services/auth_service.dart';
 import 'services/connectivity_service.dart';
@@ -22,14 +23,43 @@ import 'theme/app_theme.dart';
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await FirebaseService.initialize();
   debugPrint('FCM background message received: ${message.messageId}');
+  if (message.notification == null && message.data.isNotEmpty) {
+    await NotificationService().initialize();
+    final title = message.data['title'] ?? '🐝 BeeWare Alert';
+    final body = message.data['message'] ?? 'Anomaly detected in hive telemetry.';
+    await NotificationService().showNotification(
+      title: title,
+      body: body,
+      payload: message.data['hiveId'] ?? message.data['deviceId'],
+      severity: message.data['severity'],
+    );
+  }
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   await FirebaseService.initialize();
-  await FirebaseService().initializeFCM();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  await NotificationService().initialize();
+  FirebaseService().initializeFCM();
   await UserProfileService().initialize();
+
+  // Wake up Render backend if sleeping on free tier
+  BackendService().wakeUpBackend();
+
+  // Listen to foreground FCM messages dispatched by Render backend
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    debugPrint('📱 [BeeWare] Foreground FCM message received from Render: ${message.messageId}');
+    final title = message.notification?.title ?? message.data['title'] ?? '🐝 BeeWare Alert';
+    final body = message.notification?.body ?? message.data['message'] ?? 'Anomaly detected in hive telemetry.';
+    NotificationService().showNotification(
+      title: title,
+      body: body,
+      payload: message.data['hiveId'] ?? message.data['deviceId'],
+      severity: message.data['severity'],
+    );
+  });
+
   runApp(const BeeWareApp());
 }
 
@@ -39,6 +69,7 @@ class BeeWareApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'BeeWare',
       theme: ThemeData(
         useMaterial3: false,

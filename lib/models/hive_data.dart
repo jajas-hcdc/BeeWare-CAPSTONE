@@ -39,6 +39,10 @@ class HiveData {
   final String detectedBy;
   final String alertRecommendation;
   final String? audioFilePath;
+  final String? qrCodeUrl;
+  final String? lastAudioRecordedTime;
+  final String? lastAudioTrigger;
+  final int? lastAudioCreatedAt;
 
   HiveData({
     required this.id,
@@ -77,6 +81,10 @@ class HiveData {
     this.detectedBy = 'AI Acoustic Analysis',
     this.alertRecommendation = 'Continue regular inspection routine.',
     this.audioFilePath,
+    this.qrCodeUrl,
+    this.lastAudioRecordedTime,
+    this.lastAudioTrigger,
+    this.lastAudioCreatedAt,
   });
 
   Color get labelColor {
@@ -143,6 +151,15 @@ class HiveData {
           conditionLabel.toLowerCase().contains('healthy') ||
           conditionLabel.isEmpty);
 
+  /// URL for generating/downloading the hive QR code sticker.
+  /// Uses the URL provided by ESP32/Firestore if present,
+  /// or falls back to standard api.qrserver.com format with deviceId.
+  String get effectiveQrCodeUrl {
+    if (qrCodeUrl != null && qrCodeUrl!.isNotEmpty) return qrCodeUrl!;
+    final encoded = Uri.encodeComponent('{"deviceId":"$deviceId"}');
+    return 'https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=$encoded';
+  }
+
   HiveData copyWith({
     String? id,
     String? name,
@@ -178,6 +195,10 @@ class HiveData {
     String? detectedBy,
     String? alertRecommendation,
     String? audioFilePath,
+    String? qrCodeUrl,
+    String? lastAudioRecordedTime,
+    String? lastAudioTrigger,
+    int? lastAudioCreatedAt,
   }) {
     return HiveData(
       id: id ?? this.id,
@@ -214,6 +235,10 @@ class HiveData {
       detectedBy: detectedBy ?? this.detectedBy,
       alertRecommendation: alertRecommendation ?? this.alertRecommendation,
       audioFilePath: audioFilePath ?? this.audioFilePath,
+      qrCodeUrl: qrCodeUrl ?? this.qrCodeUrl,
+      lastAudioRecordedTime: lastAudioRecordedTime ?? this.lastAudioRecordedTime,
+      lastAudioTrigger: lastAudioTrigger ?? this.lastAudioTrigger,
+      lastAudioCreatedAt: lastAudioCreatedAt ?? this.lastAudioCreatedAt,
     );
   }
 
@@ -268,7 +293,9 @@ class HiveData {
 
     List<double> parseDoubleList(dynamic list, List<double> fallback) {
       if (list is List) {
-        return list.map((e) => (e as num).toDouble()).toList();
+        return list
+            .map((e) => e is num ? e.toDouble() : (double.tryParse(e?.toString() ?? '') ?? 0.0))
+            .toList();
       }
       return fallback;
     }
@@ -335,6 +362,11 @@ class HiveData {
       historyDates: data['historyDates'] != null
           ? List<String>.from(data['historyDates'])
           : const [],
+      conditionTimeline: (data['conditionTimeline'] is List)
+          ? (data['conditionTimeline'] as List)
+              .map((e) => (e as Map).map((k, v) => MapEntry(k.toString(), v.toString())))
+              .toList()
+          : const [],
       temperatureHistory: parseDoubleList(data['temperatureHistory'], const []),
       humidityHistory: parseDoubleList(data['humidityHistory'], const []),
       acousticHistory: parseDoubleList(data['acousticHistory'], const []),
@@ -353,6 +385,10 @@ class HiveData {
                       ? 'Check release cage and examine worker agitation.'
                       : 'Continue regular inspection routine.'))),
       audioFilePath: data['audioFilePath'] ?? data['audio_file_path'],
+      qrCodeUrl: (data['qrCodeUrl'] ?? data['qr_code_url'] ?? data['qr_url'] ?? data['qrUrl'])?.toString(),
+      lastAudioRecordedTime: (data['lastAudioRecordedTime'] ?? data['last_audio_recorded_time'])?.toString(),
+      lastAudioTrigger: (data['lastAudioTrigger'] ?? data['last_audio_trigger'])?.toString(),
+      lastAudioCreatedAt: (data['lastAudioCreatedAt'] ?? data['last_audio_epoch'] ?? data['last_audio_created_at'] as num?)?.toInt(),
     );
   }
 
@@ -383,6 +419,8 @@ class HiveData {
       'temperatureHistory': temperatureHistory,
       'humidityHistory': humidityHistory,
       'acousticHistory': acousticHistory,
+      'historyDates': historyDates,
+      'conditionTimeline': conditionTimeline,
       'isAlert': isAlert,
       'alertSeverity': alertSeverity,
       'alertLabel': alertLabel,
@@ -391,6 +429,11 @@ class HiveData {
       'detectedBy': detectedBy,
       'alertRecommendation': alertRecommendation,
       'audioFilePath': audioFilePath,
+      'qrCodeUrl': qrCodeUrl,
+      'qr_code_url': qrCodeUrl,
+      if (lastAudioRecordedTime != null) 'last_audio_recorded_time': lastAudioRecordedTime,
+      if (lastAudioTrigger != null) 'last_audio_trigger': lastAudioTrigger,
+      if (lastAudioCreatedAt != null) 'last_audio_epoch': lastAudioCreatedAt,
     };
   }
 

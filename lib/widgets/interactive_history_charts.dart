@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import '../models/audio_recording_model.dart';
 import '../models/hive_data.dart';
 import '../services/audio_service.dart';
 import '../services/export_service.dart';
+import '../services/hive_service.dart';
 import '../theme/app_theme.dart';
 
 class InteractiveHistoryView extends StatefulWidget {
@@ -19,82 +21,39 @@ class InteractiveHistoryView extends StatefulWidget {
 class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
   int _selectedTimeframe = 1; // 0: 24H, 1: 7D, 2: 30D
   final List<String> _timeframeLabels = ['24 Hours', '7 Days', '30 Days'];
+  Timer? _clockTimer;
+
+  /// Returns the live version of the hive from HiveService, falling back to widget.hive
+  HiveData get _liveHive {
+    final live = HiveService().getHiveById(widget.hive.id);
+    return live ?? widget.hive;
+  }
 
   @override
   void initState() {
     super.initState();
     AudioService().fetchRecordingsForDevice(widget.hive.deviceId);
+    // Listen to HiveService for real-time telemetry updates
+    HiveService().addListener(_onHiveServiceUpdate);
+    // Periodically tick with the clock so elapsed minutes & hours update live
+    _clockTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
-  List<double> _sliceForTimeframe(List<double> list) {
-    if (list.isEmpty) return [];
-    if (_selectedTimeframe == 0) {
-      return list.length > 12 ? list.sublist(list.length - 12) : list;
-    } else if (_selectedTimeframe == 1) {
-      return list.length > 20 ? list.sublist(list.length - 20) : list;
-    } else {
-      return list;
-    }
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    HiveService().removeListener(_onHiveServiceUpdate);
+    super.dispose();
   }
 
-  List<String> _sliceDatesForTimeframe(List<String> list) {
-    if (list.isEmpty) return [];
-    if (_selectedTimeframe == 0) {
-      return list.length > 12 ? list.sublist(list.length - 12) : list;
-    } else if (_selectedTimeframe == 1) {
-      return list.length > 20 ? list.sublist(list.length - 20) : list;
-    } else {
-      return list;
-    }
-  }
-
-  List<String> get _currentDates {
-    final dates = widget.hive.historyDates;
-    if (dates.isNotEmpty) {
-      return _sliceDatesForTimeframe(dates);
-    }
-    if (widget.hive.updated.isNotEmpty && !widget.hive.updated.toLowerCase().contains('connect')) {
-      return [widget.hive.updated];
-    }
-    return ['Live'];
-  }
-
-  List<double> get _currentTemperature {
-    final hist = widget.hive.temperatureHistory;
-    if (hist.isNotEmpty) {
-      return _sliceForTimeframe(hist);
-    }
-    final cur = double.tryParse(widget.hive.temperature.replaceAll('°C', '').trim());
-    if (cur != null) return [cur];
-    return [];
-  }
-
-  List<double> get _currentHumidity {
-    final hist = widget.hive.humidityHistory;
-    if (hist.isNotEmpty) {
-      return _sliceForTimeframe(hist);
-    }
-    final cur = double.tryParse(widget.hive.humidity.replaceAll('%', '').trim());
-    if (cur != null) return [cur];
-    return [];
-  }
-
-  List<double> get _currentAcoustic {
-    final hist = widget.hive.acousticHistory;
-    if (hist.isNotEmpty) {
-      return _sliceForTimeframe(hist);
-    }
-    final rawStr = widget.hive.acoustic.replaceAll('Hz', '').trim();
-    final cur = double.tryParse(rawStr);
-    if (cur != null && cur > 0) {
-      final dbVal = cur > 100 ? (cur / 5.0).clamp(20.0, 72.0) : cur;
-      return [dbVal];
-    }
-    return [];
+  void _onHiveServiceUpdate() {
+    if (mounted) setState(() {});
   }
 
   /// Generate a step-back label for the given [stepsAgo] based on timeframe.
-  /// timeframe 0 = 24H (hours), 1 = 7D (days), 2 = 30D (days/weeks).
+  /// timeframe 0 = 24H (hours), 1 = 7D (days), 2 = 30D (days).
   String _stepLabel(int stepsAgo, int timeframe) {
     if (timeframe == 0) {
       // 24 Hours — step in hours
@@ -103,9 +62,8 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       // 7 Days — step in days
       return '-${stepsAgo}d';
     } else {
-      // 30 Days — step in weeks if >= 7, else days
-      final days = stepsAgo * 7;
-      return days >= 7 ? '-${stepsAgo}w' : '-${stepsAgo}d';
+      // 30 Days — step in days back
+      return '-${stepsAgo}d';
     }
   }
 
@@ -114,80 +72,108 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     return 'Today';
   }
 
-  ({List<double> values, List<String> dates}) _prepareChartData(
-    List<double> rawValues,
-    List<String> rawDates, {
-    int? timeframe,
-  }) {
-    final tf = timeframe ?? _selectedTimeframe;
+  /// Synchronized historical dataset ensuring Temperature, Humidity, Acoustic,
+  /// and X-axis date labels always share the exact same length and timeline.
+  ({
+    List<double> temps,
+    List<double> hums,
+    List<double> acoustics,
+    List<String> dates,
+  }) get _syncedHistoryData {
+    final curTemp = double.tryParse(_liveHive.temperature.replaceAll('°C', '').trim());
+    final curHum = double.tryParse(_liveHive.humidity.replaceAll('%', '').trim());
+    final rawAc = double.tryParse(_liveHive.acoustic.replaceAll('Hz', '').trim());
+    final curAc = (rawAc != null && rawAc > 0)
+        ? (rawAc > 100.0 ? (rawAc / 5.0).clamp(20.0, 72.0) : rawAc)
+        : null;
 
-    if (rawValues.isEmpty) {
-      return (values: <double>[], dates: <String>[]);
+    final hasTemps = _liveHive.temperatureHistory.isNotEmpty || curTemp != null;
+    final hasHums = _liveHive.humidityHistory.isNotEmpty || curHum != null;
+    final hasAcoustic = _liveHive.acousticHistory.isNotEmpty || curAc != null;
+
+    if (!hasTemps && !hasHums && !hasAcoustic) {
+      return (temps: <double>[], hums: <double>[], acoustics: <double>[], dates: <String>[]);
     }
 
-    final firstValid = rawValues.indexWhere((v) => v > 0.0);
-    List<double> cleanValues;
-    List<String> cleanDates;
+    var rawTemps = List<double>.from(_liveHive.temperatureHistory);
+    var rawHums = List<double>.from(_liveHive.humidityHistory);
+    var rawAcoustics = List<double>.from(_liveHive.acousticHistory);
+    var rawDates = List<String>.from(_liveHive.historyDates);
 
-    if (firstValid == -1) {
-      cleanValues = [rawValues.last];
-      cleanDates = rawDates.isNotEmpty ? [rawDates.last] : [_latestLabel(tf)];
-    } else {
-      cleanValues = rawValues.sublist(firstValid);
-      if (rawDates.length == rawValues.length) {
-        cleanDates = rawDates.sublist(firstValid);
-      } else {
-        cleanDates = rawDates;
-      }
+    final curDate = (_liveHive.updated.isNotEmpty && !_liveHive.updated.toLowerCase().contains('connect'))
+        ? _liveHive.updated
+        : _latestLabel(_selectedTimeframe);
+
+    if (rawTemps.isEmpty && curTemp != null) rawTemps = [curTemp];
+    if (rawHums.isEmpty && curHum != null) rawHums = [curHum];
+    if (rawAcoustics.isEmpty && curAc != null) rawAcoustics = [curAc];
+    if (rawDates.isEmpty) rawDates = [curDate];
+
+    // Find the max length across all sensor series to synchronize their timelines
+    int maxLen = [rawTemps.length, rawHums.length, rawAcoustics.length, rawDates.length].reduce(max);
+    if (maxLen == 0) {
+      return (temps: <double>[], hums: <double>[], acoustics: <double>[], dates: <String>[]);
     }
 
-    final targetLen = cleanValues.length;
-    List<String> alignedDates;
+    // Align all lists to maxLen so they share identical indices
+    while (rawTemps.length < maxLen) {
+      rawTemps.insert(0, rawTemps.isNotEmpty ? rawTemps.first : (curTemp ?? 34.0));
+    }
+    while (rawHums.length < maxLen) {
+      rawHums.insert(0, rawHums.isNotEmpty ? rawHums.first : (curHum ?? 60.0));
+    }
+    while (rawAcoustics.length < maxLen) {
+      rawAcoustics.insert(0, rawAcoustics.isNotEmpty ? rawAcoustics.first : (curAc ?? 55.0));
+    }
+    while (rawDates.length < maxLen) {
+      rawDates.insert(0, '');
+    }
 
-    if (targetLen == 1) {
-      // Pad single reading to 5 bars so the chart is scrollable
-      final val = cleanValues[0];
-      final label = cleanDates.isNotEmpty ? cleanDates.last : _latestLabel(tf);
-      cleanValues = [val, val, val, val, val];
-      alignedDates = [
-        _stepLabel(4, tf),
-        _stepLabel(3, tf),
-        _stepLabel(2, tf),
-        _stepLabel(1, tf),
-        label,
+    // Timeframe slicing (0: 24H -> 12 points, 1: 7D -> 20 points, 2: 30D -> 30 points)
+    final int sliceLimit = _selectedTimeframe == 0 ? 12 : (_selectedTimeframe == 1 ? 20 : 30);
+    if (maxLen > sliceLimit) {
+      final start = maxLen - sliceLimit;
+      rawTemps = rawTemps.sublist(start);
+      rawHums = rawHums.sublist(start);
+      rawAcoustics = rawAcoustics.sublist(start);
+      rawDates = rawDates.sublist(start);
+      maxLen = sliceLimit;
+    }
+
+    // Pad single reading to 6 bars so the chart is scrollable & displays nicely
+    if (maxLen == 1) {
+      final t = rawTemps[0];
+      final h = rawHums[0];
+      final a = rawAcoustics[0];
+      final d = rawDates[0].isNotEmpty ? rawDates[0] : _latestLabel(_selectedTimeframe);
+      rawTemps = [t, t, t, t, t, t];
+      rawHums = [h, h, h, h, h, h];
+      rawAcoustics = [a, a, a, a, a, a];
+      rawDates = [
+        _stepLabel(5, _selectedTimeframe),
+        _stepLabel(4, _selectedTimeframe),
+        _stepLabel(3, _selectedTimeframe),
+        _stepLabel(2, _selectedTimeframe),
+        _stepLabel(1, _selectedTimeframe),
+        d,
       ];
-    } else if (targetLen <= 3) {
-      // Pad small sets to at least 5 bars for consistent scrolling
-      final padCount = 5 - targetLen;
-      final padValues = List<double>.filled(padCount, cleanValues.first);
-      cleanValues = [...padValues, ...cleanValues];
-      final padDates = List.generate(padCount, (i) {
-        final stepsAgo = padCount - i + targetLen - 1;
-        return _stepLabel(stepsAgo, tf);
-      });
-      // Build real dates for the existing values
-      final realDates = cleanDates.length == targetLen
-          ? List<String>.from(cleanDates)
-          : List.generate(targetLen, (i) =>
-              i == targetLen - 1
-                  ? (cleanDates.isNotEmpty ? cleanDates.last : _latestLabel(tf))
-                  : _stepLabel(targetLen - 1 - i, tf));
-      alignedDates = [...padDates, ...realDates];
-    } else if (cleanDates.length == targetLen) {
-      alignedDates = List<String>.from(cleanDates);
-    } else if (cleanDates.length > targetLen) {
-      alignedDates = cleanDates.sublist(cleanDates.length - targetLen);
     } else {
-      alignedDates = List<String>.filled(targetLen, '');
-      final latest = cleanDates.isNotEmpty ? cleanDates.last : _latestLabel(tf);
-      alignedDates[targetLen - 1] = latest;
-      for (int i = targetLen - 2; i >= 0; i--) {
-        final stepsAgo = targetLen - 1 - i;
-        alignedDates[i] = _stepLabel(stepsAgo, tf);
+      final latest = rawDates.last.isNotEmpty ? rawDates.last : _latestLabel(_selectedTimeframe);
+      rawDates[rawDates.length - 1] = latest;
+      for (int i = rawDates.length - 2; i >= 0; i--) {
+        if (rawDates[i].isEmpty || rawDates[i] == 'Now') {
+          final stepsAgo = rawDates.length - 1 - i;
+          rawDates[i] = _stepLabel(stepsAgo, _selectedTimeframe);
+        }
       }
     }
 
-    return (values: cleanValues, dates: alignedDates);
+    return (
+      temps: hasTemps ? rawTemps : <double>[],
+      hums: hasHums ? rawHums : <double>[],
+      acoustics: hasAcoustic ? rawAcoustics : <double>[],
+      dates: rawDates,
+    );
   }
 
   @override
@@ -265,9 +251,9 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
               tooltip: 'Export Report',
               onSelected: (value) {
                 if (value == 'csv') {
-                  ExportService.exportCsvReport(context, widget.hive);
+                  ExportService.exportCsvReport(context, _liveHive);
                 } else if (value == 'audit') {
-                  ExportService.exportAuditReport(context, widget.hive);
+                  ExportService.exportAuditReport(context, _liveHive);
                 }
               },
               itemBuilder: (context) => [
@@ -378,10 +364,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
   // ================= TEMPERATURE CARD =================
   Widget _buildTemperatureCard() {
-    final rawTemps = _currentTemperature;
-    final dates = _currentDates;
+    final synced = _syncedHistoryData;
+    final temps = synced.temps;
+    final chartDates = synced.dates;
 
-    if (rawTemps.isEmpty) {
+    if (temps.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(20.0),
         decoration: AppStyles.cardDecoration(),
@@ -401,7 +388,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
             const Icon(Icons.sensors_outlined, size: 36, color: Colors.black26),
             const SizedBox(height: 8),
             Text(
-              'Awaiting live temperature data from ${widget.hive.deviceId}...',
+              'Awaiting live temperature data from ${_liveHive.deviceId}...',
               style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ],
@@ -409,9 +396,6 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       );
     }
 
-    final prepared = _prepareChartData(rawTemps, dates);
-    final temps = prepared.values;
-    final chartDates = prepared.dates;
     final validTemps = temps.where((t) => t > 0.0).toList();
     final avgTemp = validTemps.isNotEmpty
         ? (validTemps.reduce((a, b) => a + b) / validTemps.length).toStringAsFixed(1)
@@ -555,10 +539,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
   // ================= HUMIDITY CARD =================
   Widget _buildHumidityCard() {
-    final rawHums = _currentHumidity;
-    final dates = _currentDates;
+    final synced = _syncedHistoryData;
+    final hums = synced.hums;
+    final chartDates = synced.dates;
 
-    if (rawHums.isEmpty) {
+    if (hums.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(20.0),
         decoration: AppStyles.cardDecoration(),
@@ -578,7 +563,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
             const Icon(Icons.water_outlined, size: 36, color: Colors.black26),
             const SizedBox(height: 8),
             Text(
-              'Awaiting live humidity data from ${widget.hive.deviceId}...',
+              'Awaiting live humidity data from ${_liveHive.deviceId}...',
               style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ],
@@ -586,9 +571,6 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       );
     }
 
-    final prepared = _prepareChartData(rawHums, dates);
-    final hums = prepared.values;
-    final chartDates = prepared.dates;
     final validHums = hums.where((h) => h > 0.0).toList();
     final avgHum = validHums.isNotEmpty
         ? (validHums.reduce((a, b) => a + b) / validHums.length).toStringAsFixed(0)
@@ -730,10 +712,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
   // ================= ACOUSTIC CARD =================
   Widget _buildAcousticCard() {
-    final rawAcoustics = _currentAcoustic;
-    final dates = _currentDates;
+    final synced = _syncedHistoryData;
+    final acoustics = synced.acoustics;
+    final chartDates = synced.dates;
 
-    if (rawAcoustics.isEmpty) {
+    if (acoustics.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(20.0),
         decoration: AppStyles.cardDecoration(),
@@ -753,7 +736,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
             const Icon(Icons.mic_none_outlined, size: 36, color: Colors.black26),
             const SizedBox(height: 8),
             Text(
-              'Awaiting audio stream packets from ${widget.hive.deviceId}...',
+              'Awaiting audio stream packets from ${_liveHive.deviceId}...',
               style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ],
@@ -761,9 +744,6 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       );
     }
 
-    final prepared = _prepareChartData(rawAcoustics, dates);
-    final acoustics = prepared.values;
-    final chartDates = prepared.dates;
     final validAcoustics = acoustics.where((a) => a > 0.0).toList();
     final avgDb = validAcoustics.isNotEmpty
         ? (validAcoustics.map((v) => v > 100.0 ? (v / 5.0).clamp(20.0, 70.0) : v).reduce((a, b) => a + b) / validAcoustics.length).toStringAsFixed(0)
@@ -902,12 +882,12 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
   // ================= TIMELINE CARD =================
   Widget _buildTimelineCard() {
-    final timeline = widget.hive.conditionTimeline.isNotEmpty
-        ? widget.hive.conditionTimeline
+    final timeline = _liveHive.conditionTimeline.isNotEmpty
+        ? _liveHive.conditionTimeline
         : [
             {
-              'date': widget.hive.updated,
-              'status': widget.hive.conditionLabel,
+              'date': _liveHive.updated,
+              'status': _liveHive.conditionLabel,
             }
           ];
 
@@ -926,8 +906,8 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
             spacing: 10,
             runSpacing: 10,
             children: timeline.map((item) {
-              final status = item['status'] ?? widget.hive.conditionLabel;
-              final date = item['date'] ?? widget.hive.updated;
+              final status = item['status'] ?? _liveHive.conditionLabel;
+              final date = item['date'] ?? _liveHive.updated;
               Color pillBg;
               Color pillText;
 
@@ -988,7 +968,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
       animation: AudioService(),
       builder: (context, _) {
         final audioService = AudioService();
-        final recordings = audioService.getCachedRecordings(widget.hive.deviceId);
+        final recordings = audioService.getCachedRecordings(_liveHive.deviceId);
         final isPlaying = audioService.isPlaying;
         final activeId = audioService.activePlayingId;
 
@@ -1013,7 +993,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   ),
                   InkWell(
                     onTap: () {
-                      audioService.fetchRecordingsForDevice(widget.hive.deviceId);
+                      audioService.fetchRecordingsForDevice(_liveHive.deviceId);
                     },
                     borderRadius: BorderRadius.circular(6),
                     child: Container(
@@ -1058,7 +1038,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                       const Icon(Icons.mic_none_outlined, size: 36, color: Colors.black38),
                       const SizedBox(height: 8),
                       Text(
-                        'Awaiting buzz recordings from ${widget.hive.name}...',
+                        'Awaiting buzz recordings from ${_liveHive.name}...',
                         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87),
                       ),
                       const SizedBox(height: 4),
@@ -1133,12 +1113,53 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Text(
-                                      'Clip #${index + 1} • ${_getClipDisplayTimestamp(index, clip)}',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w800,
-                                        color: Colors.black,
+                                    Expanded(
+                                      child: Row(
+                                        children: [
+                                          Text(
+                                            'Clip #${index + 1}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w800,
+                                              color: Colors.black,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                            decoration: BoxDecoration(
+                                              color: clip.isRestartEvent
+                                                  ? const Color(0xFFFFF3E0)
+                                                  : const Color(0xFFE3F2FD),
+                                              borderRadius: BorderRadius.circular(4),
+                                              border: Border.all(
+                                                color: clip.isRestartEvent
+                                                    ? const Color(0xFFFFB74D)
+                                                    : const Color(0xFF90CAF9),
+                                                width: 0.8,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(
+                                                  clip.isRestartEvent ? Icons.restart_alt : Icons.hourglass_bottom_rounded,
+                                                  size: 10,
+                                                  color: clip.isRestartEvent ? const Color(0xFFE65100) : const Color(0xFF1976D2),
+                                                ),
+                                                const SizedBox(width: 3),
+                                                Text(
+                                                  clip.triggerLabel,
+                                                  style: TextStyle(
+                                                    fontSize: 9.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: clip.isRestartEvent ? const Color(0xFFE65100) : const Color(0xFF1976D2),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                     Container(
@@ -1158,7 +1179,25 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 4),
+                                const SizedBox(height: 3),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.access_time_filled, size: 12, color: Colors.black45),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        'Recorded at ${clip.formattedRecordedTime}${clip.formattedRecordedDate.isNotEmpty ? " • ${clip.formattedRecordedDate}" : ""} (${_getClipDisplayTimestamp(index, clip)})',
+                                        style: const TextStyle(
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.black87,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 3),
                                 Row(
                                   children: [
                                     Text(
@@ -1202,18 +1241,29 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
   }
 
   String _getClipDisplayTimestamp(int index, AudioRecordingModel clip) {
-    // If valid Unix epoch timestamp (after 2023)
-    if (clip.createdAt > 1700000000000) {
-      final diffMs = DateTime.now().millisecondsSinceEpoch - clip.createdAt;
+    int epoch = clip.createdAt;
+    if (epoch > 0 && epoch < 1700000000000 && epoch > 1700000000) {
+      epoch = epoch * 1000;
+    }
+
+    if (epoch > 1700000000000) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final diffMs = now - epoch;
       if (diffMs >= 0) {
         final diffMin = diffMs ~/ 60000;
-        if (diffMin < 2) return 'Just now';
-        if (diffMin < 60) {
-          final rounded = (diffMin / 5).round() * 5;
-          return rounded <= 0 ? 'Just now' : '$rounded mins ago';
+        if (diffMin < 1) {
+          return 'Just now';
+        } else if (diffMin < 60) {
+          return '$diffMin min${diffMin > 1 ? "s" : ""} ago';
+        } else {
+          final hours = diffMin ~/ 60;
+          if (hours < 24) {
+            return '$hours hr${hours > 1 ? "s" : ""} ago';
+          } else {
+            final days = hours ~/ 24;
+            return '$days day${days > 1 ? "s" : ""} ago';
+          }
         }
-        final hours = diffMin ~/ 60;
-        if (hours < 24) return '$hours hr${hours > 1 ? "s" : ""} ago';
       }
     }
     // Relative progressive timestamp: index 0 is "Just now", then 5 mins ago, 10 mins ago, 15, 20

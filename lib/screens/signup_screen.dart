@@ -83,13 +83,26 @@ class _SignupScreenState extends State<SignupScreen> {
       await AuthService().signUp(email, password, displayName: name);
       if (mounted) Navigator.of(context).pop();
     } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorMessage = e.message ?? e.code;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.message ?? e.code;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to create account. Please try again.';
-      });
+      if (mounted) {
+        String msg = e.toString();
+        if (msg.contains('AuthError:')) {
+          final parts = msg.split(':');
+          if (parts.length >= 3) {
+            msg = parts.sublist(2).join(':').trim();
+          }
+        } else if (msg.startsWith('Exception:')) {
+          msg = msg.substring(10).trim();
+        }
+        setState(() {
+          _errorMessage = msg.isNotEmpty ? msg : 'Failed to create account. Please try again.';
+        });
+      }
     } finally {
       if (mounted) {
         setState(() {

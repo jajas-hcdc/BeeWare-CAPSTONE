@@ -39,15 +39,16 @@ class _PredictionScreenState extends State<PredictionScreen> {
     _modelService = ModelService();
     _firebaseService = FirebaseService();
     
-    await _audioService.initialize();
-    
     try {
+      await _audioService.initialize();
       await _modelService.initialize();
       debugPrint('✅ Services initialized');
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to load model: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Failed to load model: $e';
+        });
+      }
     }
   }
   
@@ -81,6 +82,7 @@ class _PredictionScreenState extends State<PredictionScreen> {
       // Run inference
       final result = await _modelService.predict(features);
       
+      if (!mounted) return;
       setState(() {
         _currentPrediction = result['prediction'];
         _confidence = result['confidence'];
@@ -112,18 +114,21 @@ class _PredictionScreenState extends State<PredictionScreen> {
         );
       }
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Error: $e';
-        _isProcessing = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Error: $e';
+          _isProcessing = false;
+        });
+      }
       debugPrint('Error during prediction: $e');
     }
   }
   
   @override
   void dispose() {
-    _audioService.dispose();
-    _modelService.dispose();
+    if (_audioService.isRecording) {
+      _audioService.stopRecording();
+    }
     super.dispose();
   }
   

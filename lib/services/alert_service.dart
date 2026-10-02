@@ -7,6 +7,7 @@ import '../models/hive_data.dart';
 import 'backend_service.dart';
 import 'firebase_service.dart';
 import 'hive_service.dart';
+import 'notification_service.dart';
 
 class AlertService extends ChangeNotifier {
   static final AlertService _instance = AlertService._internal();
@@ -71,6 +72,15 @@ class AlertService extends ChangeNotifier {
     );
 
     _alertNotificationController.add(testAlert);
+
+    // Trigger instant native pop-up notification and in-app banner
+    await NotificationService().showNotification(
+      id: testAlert.id.hashCode,
+      title: testAlert.title,
+      body: '${testAlert.hiveId}: ${testAlert.message}',
+      payload: testAlert.id,
+      severity: testAlert.severity,
+    );
 
     // Also dispatch to backend to trigger real FCM push
     try {
@@ -372,6 +382,15 @@ class AlertService extends ChangeNotifier {
     if (!_dispatchedNotificationIds.contains(alert.id)) {
       _dispatchedNotificationIds.add(alert.id);
       _alertNotificationController.add(alert);
+
+      // Trigger native phone pop-up notification and in-app heads-up banner
+      NotificationService().showNotification(
+        id: alert.id.hashCode,
+        title: alert.title,
+        body: '${alert.hiveId}: ${alert.message}',
+        payload: alert.id,
+        severity: alert.severity,
+      );
 
       // Also sync to cloud Realtime Database for push/remote notifications
       if (_pushEnabled) {

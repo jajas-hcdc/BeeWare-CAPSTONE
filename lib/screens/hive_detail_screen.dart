@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/hive_data.dart';
+import '../services/audio_service.dart';
+import '../services/export_service.dart';
 import '../services/hive_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/circular_gauge.dart';
@@ -85,7 +87,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: HiveService(),
+      animation: Listenable.merge([HiveService(), AudioService()]),
       builder: (context, child) {
         final live = HiveService().getHiveById(_hive.id);
         if (live != null) {
@@ -97,6 +99,13 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
           appBar: CustomHeaderBar(
             title: _getHeaderTitle(),
             showBack: true,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.qr_code_2, color: Colors.black, size: 26),
+                tooltip: 'Hive QR Code',
+                onPressed: () => ExportService.showQrStickerModal(context, _hive),
+              ),
+            ],
           ),
           body: Column(
             children: [
@@ -137,6 +146,9 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
               Expanded(
                 child: PageView(
                   controller: _pageController,
+                  physics: _selectedTab == 3
+                      ? const NeverScrollableScrollPhysics()
+                      : const PageScrollPhysics(),
                   onPageChanged: (index) {
                     setState(() => _selectedTab = index);
                   },
@@ -543,6 +555,22 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
+                          Builder(
+                            builder: (context) {
+                              final recordings = AudioService().getCachedRecordings(_hive.deviceId);
+                              final latestClip = recordings.isNotEmpty ? recordings.first : null;
+                              final recTime = latestClip?.formattedRecordedTime ?? _hive.lastAudioRecordedTime;
+                              if (recTime == null || recTime.isEmpty) return const SizedBox.shrink();
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  'Recorded at $recTime',
+                                  style: const TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w600),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              );
+                            },
+                          ),
                         ],
                       ),
                     ),
@@ -779,6 +807,36 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                             color: isAcousticNotDetected ? const Color(0xFFD32F2F) : Colors.black54,
                             fontWeight: FontWeight.w500,
                           ),
+                        ),
+                        Builder(
+                          builder: (context) {
+                            final recordings = AudioService().getCachedRecordings(_hive.deviceId);
+                            final latestClip = recordings.isNotEmpty ? recordings.first : null;
+                            final recTime = latestClip?.formattedRecordedTime ?? _hive.lastAudioRecordedTime;
+                            final trigger = latestClip?.triggerLabel ?? _hive.lastAudioTrigger ?? 'Device Cycle';
+                            if (recTime == null || recTime.isEmpty) return const SizedBox.shrink();
+
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.mic, size: 12, color: Color(0xFFE65100)),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      'Recorded at $recTime • $trigger',
+                                      style: const TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
                         ),
                       ],
                     ),

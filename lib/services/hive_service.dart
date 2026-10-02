@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -19,11 +20,13 @@ class HiveService extends ChangeNotifier {
   }
 
   List<HiveData> _hives = [];
+  final Map<String, HiveData> _unpairedNodes = {};
   StreamSubscription<QuerySnapshot>? _hivesSubscription;
   StreamSubscription? _authSubscription;
   Timer? _debounceTimer;
 
   List<HiveData> get hives => List.unmodifiable(_hives);
+  List<HiveData> get unpairedNodes => List.unmodifiable(_unpairedNodes.values.toList());
 
   void _debouncedNotify() {
     _debounceTimer?.cancel();
@@ -84,7 +87,7 @@ class HiveService extends ChangeNotifier {
       for (var h in _hives) h.id: h,
       for (var h in _hives) h.deviceId: h,
     };
-    return docs.map((doc) {
+    final parsed = docs.map((doc) {
       final cloudHive = HiveData.fromFirestore(doc.id, doc.data());
       final existing = existingMap[cloudHive.id] ?? existingMap[cloudHive.deviceId];
       final bool cloudIsStaleOrEmpty = cloudHive.acoustic == '0 Hz' ||
@@ -120,10 +123,46 @@ class HiveService extends ChangeNotifier {
           humidityHistory: existing.humidityHistory,
           acousticHistory: existing.acousticHistory,
           historyDates: existing.historyDates,
+          qrCodeUrl: cloudHive.qrCodeUrl ?? existing.qrCodeUrl,
         );
       }
       return cloudHive;
     }).toList();
+
+    // Deduplicate by deviceId so multiple docs for the same device (e.g. manual add + cloud sync) merge into one
+    final Map<String, HiveData> deduplicated = {};
+    for (final h in parsed) {
+      final key = h.deviceId.trim().isNotEmpty
+          ? h.deviceId.trim().toUpperCase()
+          : h.id.trim();
+      if (!deduplicated.containsKey(key)) {
+        deduplicated[key] = h;
+      } else {
+        final current = deduplicated[key]!;
+        final preferH = (current.name.isEmpty || current.name.toUpperCase() == current.deviceId.toUpperCase()) &&
+            h.name.isNotEmpty &&
+            h.name.toUpperCase() != h.deviceId.toUpperCase();
+        if (preferH) {
+          deduplicated[key] = h.copyWith(
+            temperature: h.temperature != '--' ? h.temperature : current.temperature,
+            humidity: h.humidity != '--' ? h.humidity : current.humidity,
+            acoustic: h.acoustic != '0 Hz' ? h.acoustic : current.acoustic,
+            acousticStatus: h.acousticStatus != 'Not Detected (0 Hz)' ? h.acousticStatus : current.acousticStatus,
+            qrCodeUrl: h.qrCodeUrl ?? current.qrCodeUrl,
+          );
+        } else {
+          deduplicated[key] = current.copyWith(
+            temperature: current.temperature != '--' ? current.temperature : h.temperature,
+            humidity: current.humidity != '--' ? current.humidity : h.humidity,
+            acoustic: current.acoustic != '0 Hz' ? current.acoustic : h.acoustic,
+            acousticStatus: current.acousticStatus != 'Not Detected (0 Hz)' ? current.acousticStatus : h.acousticStatus,
+            audioFilePath: current.audioFilePath ?? h.audioFilePath,
+            qrCodeUrl: current.qrCodeUrl ?? h.qrCodeUrl,
+          );
+        }
+      }
+    }
+    return deduplicated.values.toList();
   }
 
   void _initFirestoreStream() {
@@ -177,9 +216,20 @@ class HiveService extends ChangeNotifier {
   }
 
   void addHive(HiveData hive) {
-    // Add locally for instant responsive UI
-    _hives.removeWhere((h) => h.id == hive.id);
-    _hives.add(hive);
+    // Remove from discovered unpaired nodes if present
+    _unpairedNodes.remove(hive.deviceId.trim().toUpperCase());
+    _unpairedNodes.remove(hive.id.trim().toUpperCase());
+
+    // Add or replace locally for instant responsive UI
+    final existingIdx = _hives.indexWhere((h) =>
+        h.id == hive.id ||
+        (h.deviceId.trim().isNotEmpty &&
+            h.deviceId.trim().toUpperCase() == hive.deviceId.trim().toUpperCase()));
+    if (existingIdx != -1) {
+      _hives[existingIdx] = hive;
+    } else {
+      _hives.add(hive);
+    }
     _saveToCache();
     notifyListeners();
 
@@ -194,6 +244,31 @@ class HiveService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Firestore add shared hive skipped: $e');
     }
+  }
+
+  /// Pairs an active discovered node from the detection phase and adds it to the user's hives
+  void pairDiscoveredNode(HiveData node, {String? customName, String? customNotes}) {
+    final devId = node.deviceId.trim().toUpperCase();
+    _unpairedNodes.remove(devId);
+
+    final hiveToAdd = node.copyWith(
+      name: (customName != null && customName.trim().isNotEmpty) ? customName.trim() : node.name,
+      notes: (customNotes != null && customNotes.trim().isNotEmpty) ? customNotes.trim() : node.notes,
+    );
+
+    addHive(hiveToAdd);
+  }
+
+  /// Dismisses a discovered node from the detection list without pairing
+  void dismissDiscoveredNode(String deviceId) {
+    _unpairedNodes.remove(deviceId.trim().toUpperCase());
+    notifyListeners();
+  }
+
+  /// Clears all currently detected unpaired nodes
+  void clearDiscoveredNodes() {
+    _unpairedNodes.clear();
+    notifyListeners();
   }
 
   void updateHive(HiveData hive) {
@@ -240,6 +315,15 @@ class HiveService extends ChangeNotifier {
     }
   }
 
+  HiveData? getHiveByDeviceId(String deviceId) {
+    try {
+      final clean = deviceId.trim().toUpperCase();
+      return _hives.firstWhere((h) => h.deviceId.trim().toUpperCase() == clean);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Updates local hive instances with fresh SQLite telemetry data from FastAPI backend
   void updateFromBackendTelemetry(List<Map<String, dynamic>> records) {
     if (records.isEmpty) return;
@@ -253,14 +337,27 @@ class HiveService extends ChangeNotifier {
 
     bool hasChanged = false;
 
+    double parseNumToDouble(dynamic val, double fallback) {
+      if (val == null) return fallback;
+      if (val is num) return val.toDouble();
+      return double.tryParse(val.toString()) ?? fallback;
+    }
+
+    int parseNumToInt(dynamic val, int fallback) {
+      if (val == null) return fallback;
+      if (val is num) return val.toInt();
+      return int.tryParse(val.toString()) ?? fallback;
+    }
+
     grouped.forEach((deviceId, devRecords) {
       if (devRecords.isEmpty) return;
       final latest = devRecords.first;
-      final temp = (latest['temperature'] as num?)?.toDouble() ?? 0.0;
-      final hum = (latest['humidity'] as num?)?.toDouble() ?? 0.0;
-      final batt = (latest['battery_level'] as num?)?.toInt() ?? 100;
-      final rssi = (latest['wifi_rssi'] as num?)?.toInt() ?? -65;
+      final temp = parseNumToDouble(latest['temperature'], 0.0);
+      final hum = parseNumToDouble(latest['humidity'], 0.0);
+      final batt = parseNumToInt(latest['battery_level'], 100);
+      final rssi = parseNumToInt(latest['wifi_rssi'], -65);
       final audioPath = latest['audio_file_path'] as String?;
+      final qrUrl = (latest['qr_code_url'] ?? latest['qr_url'] ?? latest['qrCodeUrl']) as String?;
 
       int signalBars = 4;
       if (rssi >= -60) {
@@ -273,20 +370,27 @@ class HiveService extends ChangeNotifier {
         signalBars = 1;
       }
 
-      // Extract real-time temperature, humidity, dates & acoustic history from SQLite records
-      final tempHist = devRecords
-          .map((r) => (r['temperature'] as num?)?.toDouble() ?? 0.0)
-          .take(20)
-          .toList()
-          .reversed
+      // Extract real-time temperature, humidity, dates & acoustic history from backend records
+      // Filter out raw uninitialized sensor records where temp & hum are 0.0 if valid records exist
+      final validSensorRecords = devRecords.where((r) {
+        final t = parseNumToDouble(r['temperature'], 0.0);
+        final h = parseNumToDouble(r['humidity'], 0.0);
+        return t > 0.0 || h > 0.0;
+      }).toList();
+      final recordsToProcess = validSensorRecords.isNotEmpty ? validSensorRecords : devRecords;
+
+      // Extract the most recent 20 records (ordered chronologically from oldest to newest)
+      final recentRecords = recordsToProcess.length > 20
+          ? recordsToProcess.sublist(recordsToProcess.length - 20)
+          : recordsToProcess;
+
+      final incomingTemps = recentRecords
+          .map((r) => parseNumToDouble(r['temperature'], 0.0))
           .toList();
-      final humHist = devRecords
-          .map((r) => (r['humidity'] as num?)?.toDouble() ?? 0.0)
-          .take(20)
-          .toList()
-          .reversed
+      final incomingHums = recentRecords
+          .map((r) => parseNumToDouble(r['humidity'], 0.0))
           .toList();
-      final datesHist = devRecords
+      final incomingDates = recentRecords
           .map((r) {
             final ts = (r['timestamp'] ?? r['created_at'] ?? '').toString();
             if (ts.contains('_')) {
@@ -300,24 +404,97 @@ class HiveService extends ChangeNotifier {
             }
             return ts.isNotEmpty ? ts : 'Now';
           })
-          .take(20)
-          .toList()
-          .reversed
           .toList();
-      final acousticHist = devRecords
+      final incomingAcoustics = recentRecords
           .map((r) {
-            final f = ((r['frequency'] ?? r['frequency_hz'] ?? 0) as num).toDouble();
+            final f = parseNumToDouble(r['frequency'] ?? r['frequency_hz'], 0.0);
             if (f > 0) return (f / 5.0).clamp(20.0, 95.0);
-            final peak = (r['peak_audio'] as num?)?.toDouble();
-            if (peak != null && peak > 0) {
+            final peak = parseNumToDouble(r['peak_audio'], 0.0);
+            if (peak > 0) {
               return (peak / 50.0).clamp(20.0, 95.0);
             }
             return 0.0;
           })
-          .take(20)
-          .toList()
-          .reversed
           .toList();
+
+      // Merge incoming data with existing history (append new, deduplicate, cap at 50 points)
+      const int maxHistoryPoints = 50;
+
+      // Find existing hive to get current history for merging
+      final cleanDevId = deviceId.trim().toUpperCase();
+      final existingIdx = _hives.indexWhere((h) =>
+          h.deviceId.trim().toUpperCase() == cleanDevId ||
+          h.id.trim().toUpperCase() == cleanDevId ||
+          (h.name.trim().isNotEmpty && h.name.trim().toUpperCase() == cleanDevId));
+
+      List<double> tempHist = incomingTemps;
+      List<double> humHist = incomingHums;
+      List<String> datesHist = incomingDates;
+      List<double> acousticHist = incomingAcoustics;
+
+      if (existingIdx != -1) {
+        final existing = _hives[existingIdx];
+
+        // Harmonize existing history arrays to the same length
+        int existLen = [
+          existing.temperatureHistory.length,
+          existing.humidityHistory.length,
+          existing.acousticHistory.length,
+          existing.historyDates.length,
+        ].reduce(max);
+
+        final mergedDates = List<String>.from(existing.historyDates);
+        final mergedTemps = List<double>.from(existing.temperatureHistory);
+        final mergedHums = List<double>.from(existing.humidityHistory);
+        final mergedAcoustics = List<double>.from(existing.acousticHistory);
+
+        while (mergedTemps.length < existLen) {
+          mergedTemps.insert(0, mergedTemps.isNotEmpty ? mergedTemps.first : temp);
+        }
+        while (mergedHums.length < existLen) {
+          mergedHums.insert(0, mergedHums.isNotEmpty ? mergedHums.first : hum);
+        }
+        while (mergedAcoustics.length < existLen) {
+          mergedAcoustics.insert(0, mergedAcoustics.isNotEmpty ? mergedAcoustics.first : 0.0);
+        }
+        while (mergedDates.length < existLen) {
+          mergedDates.insert(0, '');
+        }
+
+        // Append only new data points that aren't already in the history
+        for (int i = 0; i < incomingDates.length; i++) {
+          final dateLabel = incomingDates[i];
+          final tVal = i < incomingTemps.length ? incomingTemps[i] : temp;
+          final hVal = i < incomingHums.length ? incomingHums[i] : hum;
+          final aVal = i < incomingAcoustics.length ? incomingAcoustics[i] : 0.0;
+
+          // Skip if this timestamp already exists in history (dedup, avoid updating if label is identical)
+          if (mergedDates.isNotEmpty && mergedDates.last == dateLabel && dateLabel != 'Now' && mergedDates.length > 1) {
+            mergedTemps[mergedTemps.length - 1] = tVal;
+            mergedHums[mergedHums.length - 1] = hVal;
+            mergedAcoustics[mergedAcoustics.length - 1] = aVal;
+            continue;
+          }
+          mergedDates.add(dateLabel);
+          mergedTemps.add(tVal);
+          mergedHums.add(hVal);
+          mergedAcoustics.add(aVal);
+        }
+
+        // Cap at maxHistoryPoints, keeping all arrays strictly synced to the same start index
+        if (mergedDates.length > maxHistoryPoints) {
+          final start = mergedDates.length - maxHistoryPoints;
+          datesHist = mergedDates.sublist(start);
+          tempHist = mergedTemps.sublist(start);
+          humHist = mergedHums.sublist(start);
+          acousticHist = mergedAcoustics.sublist(start);
+        } else {
+          datesHist = mergedDates;
+          tempHist = mergedTemps;
+          humHist = mergedHums;
+          acousticHist = mergedAcoustics;
+        }
+      }
 
       // Extract acoustic frequency (Hz)
       final rawFreq = latest['frequency'] ?? latest['frequency_hz'];
@@ -331,6 +508,11 @@ class HiveService extends ChangeNotifier {
       final String acousticStr = hasAcoustic ? '$freqHz Hz' : '0 Hz';
       final String acousticStatusStr = hasAcoustic ? 'Normal' : 'Not Detected (0 Hz)';
 
+      // Extract last audio recording metadata
+      final lastAudioRecTime = (latest['last_audio_recorded_time'] ?? latest['lastAudioRecordedTime'])?.toString();
+      final lastAudioTrig = (latest['last_audio_trigger'] ?? latest['lastAudioTrigger'])?.toString();
+      final lastAudioEpoch = parseNumToInt(latest['last_audio_epoch'] ?? latest['last_audio_created_at'], 0);
+
       // Extract condition label & confidence if pushed by ESP32 / cloud
       String? condLabel = (latest['conditionLabel'] ?? latest['queen_status']) as String?;
       if (!hasAcoustic && (condLabel == null || condLabel == 'Queen Present' || condLabel == 'Normal')) {
@@ -339,8 +521,8 @@ class HiveService extends ChangeNotifier {
         // A frequency between 50 to 260 Hz combined with standard hive harmonics indicates Queen Present
         condLabel = 'Queen Present';
       }
-      final conf = (latest['confidence'] as num?)?.toInt();
-      final health = (latest['healthScore'] as num?)?.toInt();
+      final conf = parseNumToInt(latest['confidence'], !hasAcoustic ? 50 : (freqHz >= 50 && freqHz <= 260 ? 95 : 90));
+      final health = parseNumToInt(latest['healthScore'], 0);
 
       // Dynamically calculate health score from real-time sensor metrics
       final dynamicHealth = _calculateDynamicHealthScore(
@@ -352,13 +534,10 @@ class HiveService extends ChangeNotifier {
 
       final effectiveHealth = !hasAcoustic
           ? 30
-          : ((health != null && health > 0) ? health : dynamicHealth);
+          : (health > 0 ? health : dynamicHealth);
 
-      // Find matching hive by deviceId, id, or name
-      final index = _hives.indexWhere((h) =>
-          h.deviceId.trim().toUpperCase() == deviceId.trim().toUpperCase() ||
-          h.id.trim().toUpperCase() == deviceId.trim().toUpperCase() ||
-          (h.name.trim().isNotEmpty && h.name.toUpperCase().contains(deviceId.toUpperCase())));
+      // Reuse the existing hive index found during history merge above
+      final index = existingIdx;
 
       if (index != -1) {
         final existing = _hives[index];
@@ -377,7 +556,7 @@ class HiveService extends ChangeNotifier {
         _hives[index] = existing.copyWith(
           conditionLabel: effectiveCond,
           explanation: explanationText,
-          confidence: conf ?? (!hasAcoustic ? 50 : ((hasAcoustic && freqHz >= 50 && freqHz <= 260) ? 95 : existing.confidence)),
+          confidence: conf,
           healthScore: effectiveHealth,
           temperature: temp.toStringAsFixed(1),
           humidity: hum.toStringAsFixed(0),
@@ -407,11 +586,77 @@ class HiveService extends ChangeNotifier {
           signalBars: signalBars,
           updated: 'Just now',
           audioFilePath: audioPath ?? existing.audioFilePath,
+          qrCodeUrl: qrUrl ?? existing.qrCodeUrl,
           historyDates: datesHist.isNotEmpty ? datesHist : existing.historyDates,
           temperatureHistory: tempHist.isNotEmpty ? tempHist : existing.temperatureHistory,
           humidityHistory: humHist.isNotEmpty ? humHist : existing.humidityHistory,
           acousticHistory: acousticHist.isNotEmpty ? acousticHist : existing.acousticHistory,
+          lastAudioRecordedTime: lastAudioRecTime ?? existing.lastAudioRecordedTime,
+          lastAudioTrigger: lastAudioTrig ?? existing.lastAudioTrigger,
+          lastAudioCreatedAt: lastAudioEpoch > 0 ? lastAudioEpoch : existing.lastAudioCreatedAt,
         );
+        hasChanged = true;
+      } else {
+        // Auto-discover and create new hive from live IoT telemetry
+        final String newId = 'hive_${deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_').toLowerCase()}';
+        final String friendlyName = 'Hive ${deviceId.toUpperCase()}';
+        final effectiveCond = condLabel ?? 'Queen Present';
+        final isAbs = effectiveCond.toLowerCase().contains('absent');
+        final isRej = effectiveCond.toLowerCase().contains('rejected');
+        final isAcc = effectiveCond.toLowerCase().contains('accepted');
+        final isPres = !isAbs && !isRej && !isAcc && hasAcoustic;
+
+        final newHive = HiveData(
+          id: newId,
+          name: friendlyName,
+          deviceId: deviceId.toUpperCase(),
+          notes: 'Auto-discovered from live IoT telemetry.',
+          conditionLabel: effectiveCond,
+          confidence: conf,
+          healthScore: effectiveHealth,
+          temperature: temp.toStringAsFixed(1),
+          humidity: hum.toStringAsFixed(0),
+          acoustic: acousticStr,
+          acousticStatus: acousticStatusStr,
+          isAlert: !hasAcoustic || isAbs || isRej,
+          alertSeverity: !hasAcoustic ? 'Critical' : (isAbs ? 'Critical' : (isRej ? 'Warning' : 'Info')),
+          alertLabel: !hasAcoustic
+              ? '⚠️ Acoustic Signal Not Detected (0 Hz)'
+              : (isAbs ? 'Queen Absent' : (isRej ? 'Queen Rejected' : 'Queen Present')),
+          alertMessage: !hasAcoustic
+              ? 'Acoustic microphone on $friendlyName is detecting 0 Hz.'
+              : (isAbs
+                  ? 'Colony is Queenless.'
+                  : (isRej ? 'Colony rejecting queen.' : 'Colony is queenright and stable.')),
+          queenPresentDetected: hasAcoustic && isPres,
+          queenAbsentDetected: hasAcoustic && isAbs,
+          queenAcceptedDetected: hasAcoustic && isAcc,
+          queenRejectedDetected: hasAcoustic && isRej,
+          recommendation: isAbs
+              ? 'Inspect frames for emergency queen cells or introduce a new mated queen promptly.'
+              : (isRej
+                  ? 'Check release cage immediately and examine worker agitation.'
+                  : (isAcc
+                      ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
+                      : 'Colony is queenright and stable. Continue regular monitoring.')),
+          batteryLevel: '$batt%',
+          wifiStatus: 'Connected',
+          signalBars: signalBars,
+          updated: 'Just now',
+          audioFilePath: audioPath,
+          qrCodeUrl: qrUrl,
+          historyDates: datesHist,
+          temperatureHistory: tempHist,
+          humidityHistory: humHist,
+          acousticHistory: acousticHist,
+          lastAudioRecordedTime: lastAudioRecTime,
+          lastAudioTrigger: lastAudioTrig,
+          lastAudioCreatedAt: lastAudioEpoch > 0 ? lastAudioEpoch : null,
+        );
+
+        // Do not inject directly into the user's paired "My Hives" list.
+        // Instead, store in _unpairedNodes so it pops up in the "Node Detection Phase"!
+        _unpairedNodes[deviceId.toUpperCase()] = newHive;
         hasChanged = true;
       }
     });

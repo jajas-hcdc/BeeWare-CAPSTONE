@@ -1,4 +1,3 @@
-// lib/services/audio_service.dart
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -6,7 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/audio_recording_model.dart';
+import 'notification_service.dart';
 
 class AudioService extends ChangeNotifier {
   static final AudioService _instance = AudioService._internal();
@@ -17,6 +18,7 @@ class AudioService extends ChangeNotifier {
 
   AudioService._internal() {
     _initPlayer();
+    _loadFromCache();
   }
 
   static const String _firebaseRtdbUrl =
@@ -69,7 +71,7 @@ class AudioService extends ChangeNotifier {
         toFile: path,
         codec: Codec.pcm16WAV,
         bitRate: 128000,
-        sampleRate: 16000,
+        sampleRate: 22050,
       );
 
       _isRecording = true;
@@ -96,6 +98,30 @@ class AudioService extends ChangeNotifier {
     }
   }
 
+  Future<void> _loadFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final keys = prefs.getKeys().where((k) => k.startsWith('beeware_cached_audio_'));
+      for (final key in keys) {
+        final deviceId = key.replaceFirst('beeware_cached_audio_', '');
+        final jsonStr = prefs.getString(key);
+        if (jsonStr != null && jsonStr.isNotEmpty) {
+          final List<dynamic> decoded = jsonDecode(jsonStr);
+          final list = decoded
+              .map((item) => AudioRecordingModel.fromMap(
+                    (item as Map)['id']?.toString() ?? 'slot_0',
+                    Map<String, dynamic>.from(item),
+                  ))
+              .toList();
+          _recordingsCache[deviceId] = list;
+        }
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error loading cached audio recordings: $e');
+    }
+  }
+
   /// Fetches up to 5 stored recordings for a given deviceId from Firebase Cloud RTDB
   Future<List<AudioRecordingModel>> fetchRecordingsForDevice(String deviceId) async {
     final cleanId = deviceId.trim();
@@ -110,29 +136,75 @@ class AudioService extends ChangeNotifier {
         final List<AudioRecordingModel> list = [];
 
         if (data is Map<String, dynamic>) {
+          final prefs = await SharedPreferences.getInstance();
+          final now = DateTime.now().millisecondsSinceEpoch;
+
+          final entries = <Map<String, dynamic>>[];
+          int maxUptimeMillis = 0;
+
           data.forEach((slotKey, slotData) {
             if (slotData is Map) {
-              final model = AudioRecordingModel.fromMap(
-                slotKey,
-                Map<String, dynamic>.from(slotData),
-              );
-              list.add(model);
+              final map = Map<String, dynamic>.from(slotData);
+              map['_slotKey'] = slotKey.toString();
+
+              int rawCreated = 0;
+              final rawVal = map['created_at'] ?? map['createdAt'];
+              if (rawVal is num) {
+                rawCreated = rawVal.toInt();
+              } else if (rawVal is String) {
+                rawCreated = int.tryParse(rawVal) ?? 0;
+              }
+              map['_rawCreatedAt'] = rawCreated;
+              if (rawCreated < 1700000000000 && rawCreated > maxUptimeMillis) {
+                maxUptimeMillis = rawCreated;
+              }
+              entries.add(map);
             }
           });
+
+          for (final entry in entries) {
+            final slotKey = entry['_slotKey'] as String;
+            final rawCreated = entry['_rawCreatedAt'] as int;
+
+            int realEpoch;
+            if (rawCreated > 1700000000000) {
+              realEpoch = rawCreated;
+            } else if (rawCreated > 1700000000) {
+              realEpoch = rawCreated * 1000;
+            } else {
+              // Persist arrival timestamp in app so it stays anchored to the clock
+              final cacheKey = 'beeware_clip_arrival_${cleanId}_${slotKey}_$rawCreated';
+              final savedEpoch = prefs.getInt(cacheKey);
+
+              if (savedEpoch != null && savedEpoch > 1700000000000) {
+                realEpoch = savedEpoch;
+              } else {
+                final deltaMs = maxUptimeMillis > rawCreated ? (maxUptimeMillis - rawCreated) : 0;
+                realEpoch = now - deltaMs;
+                await prefs.setInt(cacheKey, realEpoch);
+              }
+            }
+
+            entry['createdAt'] = realEpoch;
+            entry['created_at'] = realEpoch;
+
+            final model = AudioRecordingModel.fromMap(slotKey, entry);
+            list.add(model);
+          }
         }
 
-        // Sort descending: newest recording first (by epoch timestamp or slot index)
-        list.sort((a, b) {
-          if (b.createdAt > 1700000000000 && a.createdAt > 1700000000000) {
-            return b.createdAt.compareTo(a.createdAt);
-          }
-          final cmp = b.createdAt.compareTo(a.createdAt);
-          if (cmp != 0) return cmp;
-          return b.slot.compareTo(a.slot);
-        });
+        // Sort descending: newest recording first
+        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
         final trimmed = list.take(5).toList();
         _recordingsCache[cleanId] = trimmed;
+
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final encoded = jsonEncode(trimmed.map((m) => m.toMap()).toList());
+          await prefs.setString('beeware_cached_audio_$cleanId', encoded);
+        } catch (_) {}
+
         notifyListeners();
         return trimmed;
       }
@@ -148,6 +220,64 @@ class AudioService extends ChangeNotifier {
     return _recordingsCache[deviceId.trim()] ?? [];
   }
 
+  /// Records or logs an event audio clip (e.g. Device Restart or Cooldown Cycle)
+  Future<AudioRecordingModel> recordEventClip({
+    required String deviceId,
+    required String trigger, // 'Device Restart' or 'Cooldown Cycle'
+    int frequency = 210,
+    double temperature = 34.5,
+    double humidity = 62.0,
+    String condition = 'Queen Present',
+  }) async {
+    final cleanId = deviceId.trim();
+    final now = DateTime.now();
+    final epoch = now.millisecondsSinceEpoch;
+    final hour = now.hour == 0 ? 12 : (now.hour > 12 ? now.hour - 12 : now.hour);
+    final period = now.hour >= 12 ? 'PM' : 'AM';
+    final min = now.minute.toString().padLeft(2, '0');
+    final sec = now.second.toString().padLeft(2, '0');
+    final timeStr = '$hour:$min:$sec $period';
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final dateStr = '${months[now.month - 1]} ${now.day}, ${now.year}';
+
+    final existing = _recordingsCache[cleanId] ?? [];
+    final slot = existing.isEmpty ? 0 : (existing.first.slot + 1) % 5;
+
+    final newClip = AudioRecordingModel(
+      id: 'slot_$slot',
+      deviceId: cleanId,
+      slot: slot,
+      frequency: frequency,
+      condition: condition,
+      temperature: temperature,
+      humidity: humidity,
+      timestamp: timeStr,
+      createdAt: epoch,
+      trigger: trigger,
+      recordedTime: timeStr,
+      recordedDate: dateStr,
+    );
+
+    NotificationService().showAudioRecordedNotification(
+      deviceId: cleanId,
+      recordedTime: timeStr,
+      trigger: trigger,
+      frequency: frequency,
+    );
+
+    final updated = [newClip, ...existing.where((c) => c.id != newClip.id)].take(5).toList();
+    _recordingsCache[cleanId] = updated;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(updated.map((m) => m.toMap()).toList());
+      await prefs.setString('beeware_cached_audio_$cleanId', encoded);
+    } catch (_) {}
+
+    notifyListeners();
+    return newClip;
+  }
+
   /// Plays a recorded clip from Base64 or local file
   Future<void> playRecording(AudioRecordingModel clip) async {
     // If this clip is currently playing, stop it (toggle behavior)
@@ -160,8 +290,8 @@ class AudioService extends ChangeNotifier {
       await stopPlayback();
 
       String? filePath = clip.localFilePath;
+      bool isTempFile = false;
 
-      // If we only have Base64, write to a temporary WAV file in documents dir
       if (filePath == null || !File(filePath).existsSync()) {
         if (clip.audioBase64 != null && clip.audioBase64!.isNotEmpty) {
           final tempDir = await getTemporaryDirectory();
@@ -171,12 +301,13 @@ class AudioService extends ChangeNotifier {
           // If bytes do not start with 'RIFF', prepend standard 44-byte WAV header
           if (bytes.length >= 4 &&
               !(bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46)) {
-            bytes = _addWavHeader(bytes, 16000, 1, 16);
+            bytes = _addWavHeader(bytes, 22050, 1, 16);
           }
 
           final file = File('${tempDir.path}/hive_clip_${clip.deviceId}_${clip.id}.wav');
           await file.writeAsBytes(bytes, flush: true);
           filePath = file.path;
+          isTempFile = true;
         }
       }
 
@@ -200,6 +331,12 @@ class AudioService extends ChangeNotifier {
           _isPlaying = false;
           _activePlayingId = null;
           notifyListeners();
+          if (isTempFile && filePath != null) {
+            try {
+              final f = File(filePath);
+              if (f.existsSync()) f.deleteSync();
+            } catch (_) {}
+          }
         },
       );
     } catch (e) {

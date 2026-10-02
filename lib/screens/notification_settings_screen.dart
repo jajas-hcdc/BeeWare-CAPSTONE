@@ -134,6 +134,93 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                 ],
               ),
             ),
+            const SizedBox(height: 20),
+
+            // Test Pop-up Notification Button
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  foregroundColor: const Color(0xFFFFCC00),
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                icon: const Icon(Icons.notifications_active, size: 20),
+                label: const Text(
+                  'Send Test Pop-Up Notification',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
+                ),
+                onPressed: () async {
+                  await _alertService.triggerTestAlert();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('🔔 Pop-up alert dispatched to your phone and Render backend!'),
+                        duration: Duration(seconds: 3),
+                        backgroundColor: Colors.black87,
+                      ),
+                    );
+                  }
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Render Cloud Backend Status Card
+            Container(
+              padding: const EdgeInsets.all(14.0),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.black12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.cloud_done_rounded, color: Color(0xFF2E7D32), size: 18),
+                      SizedBox(width: 6),
+                      Text(
+                        'Render Cloud Push Engine',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.black),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Connected to Render FastAPI backend service. Real-time IoT anomalies trigger native system notifications with sound and drop-down banners on your phone.',
+                    style: TextStyle(fontSize: 11, color: Colors.black54, height: 1.4),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF5F5F5),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.link, size: 12, color: Colors.black45),
+                        SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            'https://beeware-capstone-bu85.onrender.com',
+                            style: TextStyle(fontSize: 10, color: Colors.black87, fontFamily: 'monospace'),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),

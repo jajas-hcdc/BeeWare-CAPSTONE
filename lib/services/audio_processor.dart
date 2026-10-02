@@ -132,7 +132,7 @@ class AudioProcessor {
         dataSize  = chunkSz;
         break;
       }
-      offset += 8 + chunkSz;
+      offset += 8 + chunkSz + (chunkSz % 2);
     }
 
     // Fallback to silence on corrupt / unsupported files

@@ -10,42 +10,30 @@ service cloud.firestore {
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
-    
-    function isResourceOwner() {
-      return isAuthenticated() && 
-        (resource.data.userId == request.auth.uid || request.resource.data.userId == request.auth.uid);
-    }
 
     // User profiles: users can only read and write their own profile
     match /users/{userId} {
       allow read, write: if isOwner(userId);
     }
 
-    // Hives collection: users can only access and manage their own hives
+    // Shared Apiary Hives: all authenticated members with the private APK can view, monitor, and manage apiary hives
     match /hives/{hiveId} {
-      allow read, update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow read, write: if isAuthenticated();
     }
 
-    // Nested user hives (alternative subcollection pattern)
+    // Nested user hives (subcollection support)
     match /users/{userId}/hives/{hiveId} {
       allow read, write: if isOwner(userId);
     }
 
-    // AI Prediction Records: users can only access their own prediction history
+    // AI Prediction Records: authenticated beekeepers can save and review model inference records
     match /predictions/{predictionId} {
-      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow read, write: if isAuthenticated();
     }
 
-    // Alert notifications: authenticated users can read alerts; writes restricted to service account / backend
+    // Alerts collection: authenticated members can view alerts and acknowledge/dismiss them
     match /alerts/{alertId} {
-      allow read: if isAuthenticated();
-      // Client cannot forge alerts directly unless authenticated for their own hive
-      allow create: if isAuthenticated() && 
-        (request.resource.data.userId == request.auth.uid || request.auth.token.firebase.sign_in_provider == 'custom');
-      allow update, delete: if false; // Immutable alert history
+      allow read, write: if isAuthenticated();
     }
   }
 }

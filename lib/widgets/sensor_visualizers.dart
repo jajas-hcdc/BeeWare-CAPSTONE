@@ -137,32 +137,44 @@ class _ThermalSparklinePainter extends CustomPainter {
 
     final path = Path();
     final fillPath = Path();
-    final stepX = size.width / (data.length - 1);
+    final stepX = data.length > 1 ? size.width / (data.length - 1) : size.width;
     final range = (maxVal - minVal) <= 0 ? 1.0 : (maxVal - minVal);
 
-    for (int i = 0; i < data.length; i++) {
-      final x = i * stepX;
-      final norm = ((data[i] - minVal) / range).clamp(0.0, 1.0);
+    if (data.length == 1) {
+      final norm = ((data[0] - minVal) / range).clamp(0.0, 1.0);
       final y = size.height - (norm * (size.height - 4)) - 2;
+      path.moveTo(0, y);
+      path.lineTo(size.width, y);
+      fillPath.moveTo(0, size.height);
+      fillPath.lineTo(0, y);
+      fillPath.lineTo(size.width, y);
+      fillPath.lineTo(size.width, size.height);
+      fillPath.close();
+    } else {
+      for (int i = 0; i < data.length; i++) {
+        final x = i * stepX;
+        final norm = ((data[i] - minVal) / range).clamp(0.0, 1.0);
+        final y = size.height - (norm * (size.height - 4)) - 2;
 
-      if (i == 0) {
-        path.moveTo(x, y);
-        fillPath.moveTo(x, size.height);
-        fillPath.lineTo(x, y);
-      } else {
-        // Smooth Bezier segment
-        final prevX = (i - 1) * stepX;
-        final prevNorm = ((data[i - 1] - minVal) / range).clamp(0.0, 1.0);
-        final prevY = size.height - (prevNorm * (size.height - 4)) - 2;
-        final cx = (prevX + x) / 2;
+        if (i == 0) {
+          path.moveTo(x, y);
+          fillPath.moveTo(x, size.height);
+          fillPath.lineTo(x, y);
+        } else {
+          // Smooth Bezier segment
+          final prevX = (i - 1) * stepX;
+          final prevNorm = ((data[i - 1] - minVal) / range).clamp(0.0, 1.0);
+          final prevY = size.height - (prevNorm * (size.height - 4)) - 2;
+          final cx = (prevX + x) / 2;
 
-        path.cubicTo(cx, prevY, cx, y, x, y);
-        fillPath.cubicTo(cx, prevY, cx, y, x, y);
+          path.cubicTo(cx, prevY, cx, y, x, y);
+          fillPath.cubicTo(cx, prevY, cx, y, x, y);
+        }
       }
-    }
 
-    fillPath.lineTo(size.width, size.height);
-    fillPath.close();
+      fillPath.lineTo(size.width, size.height);
+      fillPath.close();
+    }
 
     final fillPaint = Paint()
       ..shader = LinearGradient(
@@ -329,31 +341,43 @@ class _MoistureWavePainter extends CustomPainter {
 
     final path = Path();
     final fillPath = Path();
-    final stepX = size.width / (data.length - 1);
+    final stepX = data.length > 1 ? size.width / (data.length - 1) : size.width;
     final range = (maxVal - minVal) <= 0 ? 1.0 : (maxVal - minVal);
 
-    for (int i = 0; i < data.length; i++) {
-      final x = i * stepX;
-      final norm = ((data[i] - minVal) / range).clamp(0.0, 1.0);
+    if (data.length == 1) {
+      final norm = ((data[0] - minVal) / range).clamp(0.0, 1.0);
       final y = size.height - (norm * (size.height - 4)) - 2;
+      path.moveTo(0, y);
+      path.lineTo(size.width, y);
+      fillPath.moveTo(0, size.height);
+      fillPath.lineTo(0, y);
+      fillPath.lineTo(size.width, y);
+      fillPath.lineTo(size.width, size.height);
+      fillPath.close();
+    } else {
+      for (int i = 0; i < data.length; i++) {
+        final x = i * stepX;
+        final norm = ((data[i] - minVal) / range).clamp(0.0, 1.0);
+        final y = size.height - (norm * (size.height - 4)) - 2;
 
-      if (i == 0) {
-        path.moveTo(x, y);
-        fillPath.moveTo(x, size.height);
-        fillPath.lineTo(x, y);
-      } else {
-        final prevX = (i - 1) * stepX;
-        final prevNorm = ((data[i - 1] - minVal) / range).clamp(0.0, 1.0);
-        final prevY = size.height - (prevNorm * (size.height - 4)) - 2;
-        final cx = (prevX + x) / 2;
+        if (i == 0) {
+          path.moveTo(x, y);
+          fillPath.moveTo(x, size.height);
+          fillPath.lineTo(x, y);
+        } else {
+          final prevX = (i - 1) * stepX;
+          final prevNorm = ((data[i - 1] - minVal) / range).clamp(0.0, 1.0);
+          final prevY = size.height - (prevNorm * (size.height - 4)) - 2;
+          final cx = (prevX + x) / 2;
 
-        path.cubicTo(cx, prevY, cx, y, x, y);
-        fillPath.cubicTo(cx, prevY, cx, y, x, y);
+          path.cubicTo(cx, prevY, cx, y, x, y);
+          fillPath.cubicTo(cx, prevY, cx, y, x, y);
+        }
       }
-    }
 
-    fillPath.lineTo(size.width, size.height);
-    fillPath.close();
+      fillPath.lineTo(size.width, size.height);
+      fillPath.close();
+    }
 
     final fillPaint = Paint()
       ..shader = LinearGradient(

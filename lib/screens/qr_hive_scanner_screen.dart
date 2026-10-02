@@ -5,6 +5,7 @@ import '../models/hive_data.dart';
 import '../services/hive_service.dart';
 import '../services/backend_service.dart';
 import 'hive_detail_screen.dart';
+import 'node_detection_screen.dart';
 
 /// QR Code scanner that reads an ESP32 hive sticker and directly connects
 /// the device to the app without any Bluetooth/BLE or multi-step wizard.
@@ -81,11 +82,23 @@ class _QrHiveScannerScreenState extends State<QrHiveScannerScreen> {
     HiveData newHive;
 
     if (matchingRecords.isNotEmpty) {
+      double parseNumToDouble(dynamic val, double fallback) {
+        if (val == null) return fallback;
+        if (val is num) return val.toDouble();
+        return double.tryParse(val.toString()) ?? fallback;
+      }
+
+      int parseNumToInt(dynamic val, int fallback) {
+        if (val == null) return fallback;
+        if (val is num) return val.toInt();
+        return int.tryParse(val.toString()) ?? fallback;
+      }
+
       final latest = matchingRecords.first;
-      final temp = (latest['temperature'] as num?)?.toDouble() ?? 34.0;
-      final hum = (latest['humidity'] as num?)?.toDouble() ?? 60.0;
-      final batt = (latest['battery_level'] as num?)?.toInt() ?? 100;
-      final rssi = (latest['wifi_rssi'] as num?)?.toInt() ?? -65;
+      final temp = parseNumToDouble(latest['temperature'], 34.0);
+      final hum = parseNumToDouble(latest['humidity'], 60.0);
+      final batt = parseNumToInt(latest['battery_level'], 100);
+      final rssi = parseNumToInt(latest['wifi_rssi'], -65);
       final audioPath = latest['audio_file_path'] as String?;
 
       int signalBars = 4;
@@ -100,13 +113,24 @@ class _QrHiveScannerScreenState extends State<QrHiveScannerScreen> {
       }
 
       final tempHist = matchingRecords
-          .map((r) => (r['temperature'] as num?)?.toDouble() ?? 34.0)
+          .map((r) => parseNumToDouble(r['temperature'], 34.0))
           .take(10)
           .toList()
           .reversed
           .toList();
       final humHist = matchingRecords
-          .map((r) => (r['humidity'] as num?)?.toDouble() ?? 60.0)
+          .map((r) => parseNumToDouble(r['humidity'], 60.0))
+          .take(10)
+          .toList()
+          .reversed
+          .toList();
+
+      final acousticHist = matchingRecords
+          .map((r) {
+            final f = parseNumToDouble(r['frequency'] ?? r['frequency_hz'], 0.0);
+            if (f > 0) return (f / 5.0).clamp(20.0, 95.0);
+            return 0.0;
+          })
           .take(10)
           .toList()
           .reversed
@@ -122,8 +146,11 @@ class _QrHiveScannerScreenState extends State<QrHiveScannerScreen> {
       final acousticStr = freqHz > 0 ? '$freqHz Hz' : '0 Hz';
       final acousticStatusStr = freqHz > 0 ? 'Normal' : 'Not Detected (0 Hz)';
 
+      final existingHive = HiveService().getHiveByDeviceId(deviceId);
+      final canonicalId = existingHive?.id ?? 'hive_${deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_').toLowerCase()}';
+
       newHive = HiveData(
-        id: 'hive_${DateTime.now().millisecondsSinceEpoch}',
+        id: canonicalId,
         name: defaultHiveName,
         deviceId: deviceId,
         notes: mac != null && mac.isNotEmpty
@@ -143,13 +170,20 @@ class _QrHiveScannerScreenState extends State<QrHiveScannerScreen> {
         audioFilePath: audioPath,
         temperatureHistory: tempHist.isNotEmpty ? tempHist : [temp],
         humidityHistory: humHist.isNotEmpty ? humHist : [hum],
+        acousticHistory: acousticHist.isNotEmpty
+            ? acousticHist
+            : [freqHz > 0 ? (freqHz / 5.0).clamp(20.0, 95.0) : 0.0],
+        historyDates: const ['Just now'],
         isAlert: false,
         alertLabel: 'Queen Present',
         alertMessage: 'Direct QR pairing connected to $deviceId.',
       );
     } else {
+      final existingHive = HiveService().getHiveByDeviceId(deviceId);
+      final canonicalId = existingHive?.id ?? 'hive_${deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_').toLowerCase()}';
+
       newHive = HiveData(
-        id: 'hive_${DateTime.now().millisecondsSinceEpoch}',
+        id: canonicalId,
         name: defaultHiveName,
         deviceId: deviceId,
         notes: mac != null && mac.isNotEmpty
@@ -340,7 +374,9 @@ class _QrHiveScannerScreenState extends State<QrHiveScannerScreen> {
           ),
         );
       },
-    );
+    ).whenComplete(() {
+      nameController.dispose();
+    });
   }
 
   void _showExistingHiveDialog(HiveData existingHive) {
@@ -477,6 +513,28 @@ class _QrHiveScannerScreenState extends State<QrHiveScannerScreen> {
                     style: TextStyle(
                       color: Colors.white.withAlpha(140),
                       fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pushReplacement(
+                        MaterialPageRoute(builder: (_) => const NodeDetectionScreen()),
+                      );
+                    },
+                    icon: const Icon(Icons.sensors_rounded, size: 16, color: Color(0xFFFFCC00)),
+                    label: const Text(
+                      'Switch to Live Node Detection',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFFFCC00),
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFFFFCC00), width: 1.2),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     ),
                   ),
                   if (_scanned) ...[

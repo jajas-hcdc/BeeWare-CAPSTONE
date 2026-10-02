@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/hive_data.dart';
@@ -259,5 +261,326 @@ class ExportService {
         );
       }
     }
+  }
+
+
+
+  /// Download high-resolution QR sticker PNG from URL and share/save to gallery or files
+  static Future<void> downloadAndShareQrSticker(BuildContext context, HiveData hive) async {
+    try {
+      final url = hive.effectiveQrCodeUrl;
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        throw Exception('Server returned status ${response.statusCode}');
+      }
+
+      final bytes = response.bodyBytes;
+      final tempDir = await getTemporaryDirectory();
+      final cleanDevId = hive.deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
+      final tempFile = File('${tempDir.path}/BeeWare_QR_$cleanDevId.png');
+      await tempFile.writeAsBytes(bytes);
+
+      // Attempt to save to public Downloads directory if available on Android
+      try {
+        final downloadDir = Directory('/storage/emulated/0/Download');
+        if (downloadDir.existsSync()) {
+          final destFile = File('${downloadDir.path}/BeeWare_QR_$cleanDevId.png');
+          await destFile.writeAsBytes(bytes);
+          debugPrint('QR Sticker also saved directly to: ${destFile.path}');
+        }
+      } catch (e) {
+        debugPrint('Direct Downloads folder write skipped: $e');
+      }
+
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(tempFile.path, mimeType: 'image/png')],
+          subject: 'BeeWare Hive QR Code Sticker - ${hive.name}',
+          text: 'Official BeeWare QR Sticker for ${hive.name} (${hive.deviceId}).\nScan using BeeWare app to connect.\n\nDirect Download Link:\n${hive.effectiveQrCodeUrl}',
+        ),
+      );
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Hive QR Sticker downloaded for ${hive.name}!'),
+            backgroundColor: const Color(0xFF2E7D32),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Download QR Sticker error: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to download QR Sticker: $e'),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Shares the direct download web link via messaging/social apps so anyone can open and download the QR code image
+  static Future<void> shareQrDownloadLink(BuildContext context, HiveData hive) async {
+    try {
+      final link = hive.effectiveQrCodeUrl;
+      await SharePlus.instance.share(
+        ShareParams(
+          subject: 'BeeWare Hive QR Sticker Download Link - ${hive.name}',
+          text: 'Download the official BeeWare QR Code Sticker for ${hive.name} (${hive.deviceId}):\n$link\n\nScan this QR code sticker with the BeeWare app to monitor real-time hive telemetry.',
+        ),
+      );
+    } catch (e) {
+      debugPrint('Share QR link error: $e');
+    }
+  }
+
+  /// Display a modal bottom sheet displaying the QR Sticker with quick download and share options
+  static void showQrStickerModal(BuildContext context, HiveData hive) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (modalContext) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag handle
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Title and device badge
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${hive.name} QR Code',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Device ID: ${hive.deviceId}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black54,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF8E1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFFFD54F)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.qr_code, size: 14, color: Color(0xFFF57F17)),
+                        SizedBox(width: 4),
+                        Text(
+                          'ESP32 Node',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFF57F17),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+
+              // QR Code Container with honeycomb/border styling
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.black12, width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        hive.effectiveQrCodeUrl,
+                        width: 220,
+                        height: 220,
+                        fit: BoxFit.contain,
+                        loadingBuilder: (context, child, progress) {
+                          if (progress == null) return child;
+                          return const SizedBox(
+                            width: 220,
+                            height: 220,
+                            child: Center(
+                              child: CircularProgressIndicator(color: Color(0xFFFFCC00)),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            width: 220,
+                            height: 220,
+                            color: Colors.grey.shade100,
+                            child: const Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.broken_image_outlined, size: 40, color: Colors.grey),
+                                SizedBox(height: 8),
+                                Text(
+                                  'QR Preview Unavailable',
+                                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Scan this QR code sticker on the hive box to pair.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey.shade600,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Download Hive QR Sticker Button
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(modalContext);
+                    downloadAndShareQrSticker(context, hive);
+                  },
+                  icon: const Icon(Icons.download_rounded, color: Colors.black),
+                  label: const Text(
+                    'Download Hive QR Code',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.black,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFCC00),
+                    foregroundColor: Colors.black,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: Colors.black, width: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // Action Buttons: Share Link, Copy Link, Close
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(modalContext);
+                        shareQrDownloadLink(context, hive);
+                      },
+                      icon: const Icon(Icons.share_rounded, size: 16, color: Colors.black87),
+                      label: const Text(
+                        'Share Link',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        side: const BorderSide(color: Colors.black26),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: hive.effectiveQrCodeUrl));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('QR Code image URL copied to clipboard!'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.copy, size: 16, color: Colors.black87),
+                      label: const Text(
+                        'Copy Link',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        side: const BorderSide(color: Colors.black26),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 72,
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(modalContext),
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        side: const BorderSide(color: Colors.black26),
+                      ),
+                      child: const Text(
+                        'Close',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

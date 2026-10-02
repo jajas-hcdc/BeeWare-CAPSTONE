@@ -179,6 +179,7 @@ exports.onEsp32TelemetryUpdate = functions.database
           wifiStatus: "Connected",
           updated: "Just now",
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          qrCodeUrl: data.qr_code_url || data.qr_url || `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%7B%22deviceId%22%3A%22${deviceId}%22%7D`,
           isAlert: isQueenAbsent || isQueenRejected || isOverheating || isChilling || isAcousticSilent,
           alertSeverity: severity,
           alertLabel: alertTitle || resolvedCondition,

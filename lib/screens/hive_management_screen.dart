@@ -17,19 +17,9 @@ class HiveManagementScreen extends StatelessWidget {
 
         return Scaffold(
           backgroundColor: AppColors.screenYellow,
-          appBar: CustomHeaderBar(
+          appBar: const CustomHeaderBar(
             title: 'Hive management',
             showBack: true,
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.add, color: Colors.black, size: 28),
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (context) => const EditHiveScreen()),
-                  );
-                },
-              ),
-            ],
           ),
           body: hives.isEmpty
               ? const Center(

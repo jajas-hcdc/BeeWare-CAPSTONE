@@ -18,6 +18,7 @@ class BackendService {
   String? _customBaseUrl;
   Timer? _pollingTimer;
   bool _isPolling = false;
+  bool _isFetching = false;
 
   /// Default backend URL targeting host PC on LAN
   String get baseUrl {
@@ -29,7 +30,11 @@ class BackendService {
   }
 
   set baseUrl(String url) {
-    _customBaseUrl = url.trim();
+    var trimmed = url.trim();
+    while (trimmed.endsWith('/')) {
+      trimmed = trimmed.substring(0, trimmed.length - 1);
+    }
+    _customBaseUrl = trimmed;
   }
 
   Uri get _alertsUri => Uri.parse('$baseUrl/alerts');
@@ -69,13 +74,18 @@ class BackendService {
               if (histData is Map<String, dynamic>) {
                 histData.forEach((devKey, points) {
                   if (points is Map) {
-                    points.forEach((pushId, point) {
+                    final entries = points.entries.toList();
+                    final recentEntries = entries.length > 25
+                        ? entries.sublist(entries.length - 25)
+                        : entries;
+                    for (var entry in recentEntries) {
+                      final point = entry.value;
                       if (point is Map) {
                         final p = Map<String, dynamic>.from(point);
                         p['device_id'] = devKey;
                         records.add(p);
                       }
-                    });
+                    }
                   }
                 });
               }
@@ -91,8 +101,8 @@ class BackendService {
       debugPrint('ℹ️ Firebase RTDB telemetry fetch skipped/offline: $e');
     }
 
-    // 2. Fallback: query custom or local backend if configured and not 0.0.0.0
-    if (_customBaseUrl != null && _customBaseUrl!.isNotEmpty && !baseUrl.contains('0.0.0.0')) {
+    // 2. Fallback: query backend if configured and not 0.0.0.0
+    if (baseUrl.isNotEmpty && !baseUrl.contains('0.0.0.0')) {
       try {
         final uri = Uri.parse('$baseUrl/telemetry?limit=$limit');
         final response = await http.get(
@@ -130,9 +140,15 @@ class BackendService {
   }
 
   Future<void> _pollOnce() async {
-    final records = await fetchTelemetryRecords(limit: 20);
-    if (records.isNotEmpty) {
-      HiveService().updateFromBackendTelemetry(records);
+    if (_isFetching) return;
+    _isFetching = true;
+    try {
+      final records = await fetchTelemetryRecords(limit: 50);
+      if (records.isNotEmpty) {
+        HiveService().updateFromBackendTelemetry(records);
+      }
+    } finally {
+      _isFetching = false;
     }
   }
 
@@ -156,9 +172,28 @@ class BackendService {
   }) async {
     final userId = AuthService().currentUser?.uid;
 
+    // Normalize queenStatus so it conforms to Render's validator
+    String safeQueenStatus = 'Queen Present';
+    final lower = queenStatus.toLowerCase();
+    if (lower.contains('absent') ||
+        lower.contains('not detected') ||
+        lower.contains('buzz') ||
+        lower.contains('sensor') ||
+        lower.contains('critical')) {
+      safeQueenStatus = 'Queen Absent';
+    } else if (lower.contains('reject')) {
+      safeQueenStatus = 'Queen Rejected';
+    } else if (lower.contains('accept')) {
+      safeQueenStatus = 'Queen Accepted';
+    } else if (lower.contains('present')) {
+      safeQueenStatus = 'Queen Present';
+    } else if (severity?.toLowerCase() == 'critical' || severity?.toLowerCase() == 'warning') {
+      safeQueenStatus = 'Queen Absent';
+    }
+
     final body = jsonEncode({
       'hive_id': hiveId,
-      'queen_status': queenStatus,
+      'queen_status': safeQueenStatus,
       'title': title,
       'message': message,
       if (severity != null) 'severity': severity,
@@ -167,7 +202,10 @@ class BackendService {
       if (additionalData != null) 'additional_data': additionalData,
     });
 
-    // 1. Try Firebase RTDB cloud first (accessible from field / Starlink)
+    bool rtdbSuccess = false;
+    bool backendSuccess = false;
+
+    // 1. Post to Firebase RTDB cloud for realtime sync
     try {
       final rtdbAlertUri = Uri.parse('$_firebaseRtdbUrl/alerts.json');
       final response = await http
@@ -180,14 +218,14 @@ class BackendService {
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         debugPrint('✅ Cloud alert saved to Firebase Realtime Database');
-        return true;
+        rtdbSuccess = true;
       }
     } catch (e) {
       debugPrint('ℹ️ Cloud alert to Firebase RTDB skipped: $e');
     }
 
-    // 2. Fallback to local/custom backend if configured and not 0.0.0.0
-    if (_customBaseUrl != null && _customBaseUrl!.isNotEmpty && !baseUrl.contains('0.0.0.0')) {
+    // 2. ALWAYS dispatch to Render backend so Render triggers Firebase Cloud Messaging (FCM)
+    if (baseUrl.isNotEmpty && !baseUrl.contains('0.0.0.0')) {
       try {
         final response = await http
             .post(
@@ -198,17 +236,33 @@ class BackendService {
               },
               body: body,
             )
-            .timeout(const Duration(seconds: 4));
+            .timeout(const Duration(seconds: 6));
 
         if (response.statusCode == 200 || response.statusCode == 201) {
-          debugPrint('✅ Backend alert sent successfully');
-          return true;
+          debugPrint('✅ Render backend alert & FCM push triggered successfully: ${response.body}');
+          backendSuccess = true;
+        } else {
+          debugPrint('⚠️ Render backend returned status: ${response.statusCode}');
         }
       } catch (e) {
-        debugPrint('⚠️ Local alert request error: $e');
+        debugPrint('⚠️ Render backend alert request error: $e');
       }
     }
 
-    return false;
+    return rtdbSuccess || backendSuccess;
+  }
+
+  /// Pings Render backend to wake it up if in free-tier sleep mode
+  Future<void> wakeUpBackend() async {
+    if (baseUrl.isEmpty || baseUrl.contains('0.0.0.0')) return;
+    try {
+      final uri = Uri.parse('$baseUrl/health');
+      final resp = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        debugPrint('⚡ Render backend is awake and responding: $baseUrl');
+      }
+    } catch (e) {
+      debugPrint('ℹ️ Render backend wake-up ping: $e');
+    }
   }
 }

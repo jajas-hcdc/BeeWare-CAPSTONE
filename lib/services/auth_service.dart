@@ -94,7 +94,7 @@ class AuthService {
 
       return user;
     } on FirebaseAuthException catch (e) {
-      throw Exception('AuthError:${e.code}:${e.message}');
+      throw Exception('AuthError:${e.code}:${e.message ?? e.code}');
     } catch (e) {
       throw Exception('AuthError:unknown:${e.toString()}');
     }

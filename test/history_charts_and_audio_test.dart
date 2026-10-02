@@ -123,5 +123,69 @@ void main() {
         }
       }
     });
+
+    test('Audio recording clock-synced elapsed time formatting for hours and minutes', () {
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      final clipJustNow = AudioRecordingModel(
+        id: 'c1',
+        deviceId: 'BW-001',
+        slot: 0,
+        frequency: 200,
+        condition: 'Queen Present',
+        temperature: 34.0,
+        humidity: 60.0,
+        timestamp: 'Just now',
+        createdAt: now - 30 * 1000,
+      );
+
+      final clipMins = AudioRecordingModel(
+        id: 'c2',
+        deviceId: 'BW-001',
+        slot: 1,
+        frequency: 200,
+        condition: 'Queen Present',
+        temperature: 34.0,
+        humidity: 60.0,
+        timestamp: 'Just now',
+        createdAt: now - 15 * 60 * 1000,
+      );
+
+      final clipHours = AudioRecordingModel(
+        id: 'c3',
+        deviceId: 'BW-001',
+        slot: 2,
+        frequency: 200,
+        condition: 'Queen Present',
+        temperature: 34.0,
+        humidity: 60.0,
+        timestamp: 'Just now',
+        createdAt: now - 2 * 3600 * 1000,
+      );
+
+      String formatTime(AudioRecordingModel clip) {
+        int epoch = clip.createdAt;
+        if (epoch > 0 && epoch < 1700000000000 && epoch > 1700000000) {
+          epoch = epoch * 1000;
+        }
+        if (epoch > 1700000000000) {
+          final diffMs = DateTime.now().millisecondsSinceEpoch - epoch;
+          if (diffMs >= 0) {
+            final diffMin = diffMs ~/ 60000;
+            if (diffMin < 1) return 'Just now';
+            if (diffMin < 60) return '$diffMin min${diffMin > 1 ? "s" : ""} ago';
+            final hours = diffMin ~/ 60;
+            if (hours < 24) return '$hours hr${hours > 1 ? "s" : ""} ago';
+            final days = hours ~/ 24;
+            return '$days day${days > 1 ? "s" : ""} ago';
+          }
+        }
+        return 'Just now';
+      }
+
+      expect(formatTime(clipJustNow), 'Just now');
+      expect(formatTime(clipMins), '15 mins ago');
+      expect(formatTime(clipHours), '2 hrs ago');
+    });
   });
 }

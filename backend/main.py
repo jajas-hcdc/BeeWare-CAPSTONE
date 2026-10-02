@@ -319,15 +319,10 @@ class TelemetryRequest(BaseModel):
 
 class AlertNotificationRequest(BaseModel):
     hive_id: str = Field(..., alias="hiveId", description="Identifier of the hive")
-    queen_status: Literal[
-        "Queen Present",
-        "Queen Absent",
-        "Queen Accepted",
-        "Queen Rejected",
-    ] = Field(..., alias="queenStatus", description="Classified Queen Status")
+    queen_status: str = Field(..., alias="queenStatus", description="Classified Queen Status")
     title: Optional[str] = None
     message: Optional[str] = None
-    severity: Optional[Literal["Critical", "Warning", "Info"]] = None
+    severity: Optional[str] = Field("Info", description="Alert severity: Critical, Warning, or Info")
     recommendation: Optional[str] = None
     user_id: Optional[str] = Field(None, alias="userId", description="Target user ID")
     timestamp: Optional[datetime.datetime] = None

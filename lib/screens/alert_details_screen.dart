@@ -11,17 +11,28 @@ class AlertDetailsScreen extends StatelessWidget {
   AlertDetailsScreen({super.key, required dynamic data})
       : alert = data is AlertModel
             ? data
-            : AlertModel(
-                id: (data as HiveData).id,
-                hiveId: data.name,
-                queenStatus: data.conditionLabel,
-                title: data.alertLabel,
-                message: data.alertMessage,
-                severity: data.alertSeverity,
-                timestamp: DateTime.now(),
-                recommendation: data.alertRecommendation,
-                detectedBy: data.detectedBy,
-              );
+            : (data is HiveData
+                ? AlertModel(
+                    id: data.id,
+                    hiveId: data.name,
+                    queenStatus: data.conditionLabel,
+                    title: data.alertLabel,
+                    message: data.alertMessage,
+                    severity: data.alertSeverity,
+                    timestamp: DateTime.now(),
+                    recommendation: data.alertRecommendation,
+                    detectedBy: data.detectedBy,
+                  )
+                : AlertModel(
+                    id: 'unknown_alert',
+                    hiveId: 'Unknown Hive',
+                    queenStatus: 'Normal',
+                    title: 'System Alert',
+                    message: 'Alert details unavailable.',
+                    severity: 'Low',
+                    timestamp: DateTime.now(),
+                    recommendation: 'Check hive sensors and telemetry.',
+                  ));
 
   @override
   Widget build(BuildContext context) {

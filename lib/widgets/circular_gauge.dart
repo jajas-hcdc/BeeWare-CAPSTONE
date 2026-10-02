@@ -85,7 +85,7 @@ class _CircularGaugePainter extends CustomPainter {
     canvas.drawCircle(center, radius, trackPaint);
 
     // Draw progress arc starting from top (-pi / 2)
-    final sweepAngle = (percentage / 100) * 2 * pi;
+    final sweepAngle = (percentage.clamp(0.0, 100.0) / 100) * 2 * pi;
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
       -pi / 2,

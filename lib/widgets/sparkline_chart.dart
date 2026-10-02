@@ -61,18 +61,24 @@ class _SparklinePainter extends CustomPainter {
     final range = (maxVal - minVal) == 0 ? 1.0 : (maxVal - minVal);
 
     final path = Path();
-    final stepX = size.width / (data.length - 1);
 
-    for (int i = 0; i < data.length; i++) {
-      final x = i * stepX;
-      // Invert Y so higher values are higher up
-      final normalized = (data[i] - minVal) / range;
-      final y = size.height - (normalized * (size.height - 8)) - 4;
+    if (data.length == 1) {
+      final y = size.height / 2;
+      path.moveTo(0, y);
+      path.lineTo(size.width, y);
+    } else {
+      final stepX = size.width / (data.length - 1);
+      for (int i = 0; i < data.length; i++) {
+        final x = i * stepX;
+        // Invert Y so higher values are higher up
+        final normalized = (data[i] - minVal) / range;
+        final y = size.height - (normalized * (size.height - 8)) - 4;
 
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
+        if (i == 0) {
+          path.moveTo(x, y);
+        } else {
+          path.lineTo(x, y);
+        }
       }
     }
 
@@ -229,10 +235,10 @@ class _HistoryLineChartPainter extends CustomPainter {
 
     final path = Path();
     final points = <Offset>[];
-    final stepX = chartWidth / (values.length - 1);
+    final stepX = values.length > 1 ? chartWidth / (values.length - 1) : chartWidth / 2;
 
     for (int i = 0; i < values.length; i++) {
-      final x = leftPadding + i * stepX;
+      final x = values.length > 1 ? leftPadding + i * stepX : leftPadding + chartWidth / 2;
       final normalized = (values[i] - minGrid) / (maxGrid - minGrid);
       final clampedNorm = normalized.clamp(0.0, 1.0);
       final y = topPadding + chartHeight * (1 - clampedNorm);
