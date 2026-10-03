@@ -629,6 +629,7 @@ def start_firebase_rtdb_telemetry_watcher(interval_seconds: int = 5):
         import urllib.request
         rtdb_url = "https://beeware-beaef-default-rtdb.asia-southeast1.firebasedatabase.app/telemetry.json"
         print(f"👁️ [24/7 CLOUD WATCHER] Active. Polling {rtdb_url} every {interval_seconds}s for anomalies...")
+        last_processed_epochs: Dict[str, int] = {}
 
         while True:
             try:
@@ -642,9 +643,28 @@ def start_firebase_rtdb_telemetry_watcher(interval_seconds: int = 5):
                         if raw and raw != "null":
                             data = json.loads(raw)
                             if isinstance(data, dict):
+                                now_ms = int(time.time() * 1000)
                                 for dev_id, dev in data.items():
                                     if not isinstance(dev, dict):
                                         continue
+                                    raw_epoch = int(
+                                        dev.get("last_audio_epoch")
+                                        or dev.get("epoch")
+                                        or dev.get("created_at")
+                                        or 0
+                                    )
+                                    if 1700000000 <= raw_epoch <= 4000000000:
+                                        raw_epoch *= 1000
+
+                                    # Ignore unplugged / offline devices (no live epoch or older than 10 minutes)
+                                    if raw_epoch < 1700000000000 or (now_ms - raw_epoch) > 10 * 60 * 1000:
+                                        continue
+
+                                    # Only dispatch when a new transmission epoch is received
+                                    if last_processed_epochs.get(dev_id) == raw_epoch:
+                                        continue
+                                    last_processed_epochs[dev_id] = raw_epoch
+
                                     t = float(dev.get("temperature", 0.0) or 0.0)
                                     h = float(dev.get("humidity", 0.0) or 0.0)
                                     f = int(dev.get("frequency", dev.get("frequency_hz", 0)) or 0)

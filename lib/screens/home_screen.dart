@@ -204,9 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
             await HiveService().refreshFromCloud();
           }
           final records = await BackendService().fetchTelemetryRecords(limit: 20);
-          if (records.isNotEmpty) {
-            HiveService().updateFromBackendTelemetry(records);
-          }
+          HiveService().updateFromBackendTelemetry(records);
           await AlertService().refreshFromCloud();
         },
         child: SingleChildScrollView(
@@ -255,9 +253,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               await HiveService().refreshFromCloud();
                             }
                             final records = await BackendService().fetchTelemetryRecords(limit: 20);
-                            if (records.isNotEmpty) {
-                              HiveService().updateFromBackendTelemetry(records);
-                            }
+                            HiveService().updateFromBackendTelemetry(records);
                             await AlertService().refreshFromCloud();
                           },
                           child: Container(

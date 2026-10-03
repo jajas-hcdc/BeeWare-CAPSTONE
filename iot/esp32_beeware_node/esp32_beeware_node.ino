@@ -266,6 +266,9 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
   payload += "\"last_audio_recorded_time\":\"" + timeStr + "\",";
   payload += "\"last_audio_trigger\":\"" + String(triggerType) + "\",";
   payload += "\"last_audio_epoch\":" + String(getEpochMillis()) + ",";
+  payload += "\"epoch\":" + String(getEpochMillis()) + ",";
+  payload += "\"created_at\":" + String(getEpochMillis()) + ",";
+  payload += "\"recorded_date\":\"" + getFormattedDate() + "\",";
   payload += "\"status\":\"online\",";
   payload += "\"timestamp\":\"" + timeStr + "\"";
   payload += "}";

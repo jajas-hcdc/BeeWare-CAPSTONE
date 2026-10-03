@@ -51,9 +51,7 @@ class _NodeDetectionScreenState extends State<NodeDetectionScreen>
     }
     try {
       final records = await BackendService().fetchTelemetryRecords(limit: 50);
-      if (records.isNotEmpty) {
-        HiveService().updateFromBackendTelemetry(records);
-      }
+      HiveService().updateFromBackendTelemetry(records);
     } catch (e) {
       debugPrint('Detection polling error: $e');
     } finally {
@@ -470,14 +468,14 @@ class _NodeDetectionScreenState extends State<NodeDetectionScreen>
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: const Color(0xFF81C784)),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.wifi, size: 13, color: Color(0xFF2E7D32)),
-                    SizedBox(width: 4),
+                    const Icon(Icons.wifi, size: 13, color: Color(0xFF2E7D32)),
+                    const SizedBox(width: 4),
                     Text(
-                      'ACTIVE NODE',
-                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF2E7D32)),
+                      node.updated == 'In Cooldown' ? 'IN COOLDOWN' : 'ACTIVE NODE',
+                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF2E7D32)),
                     ),
                   ],
                 ),

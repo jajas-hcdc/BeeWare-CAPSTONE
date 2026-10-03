@@ -50,12 +50,23 @@ void main() async {
   // Listen to foreground FCM messages dispatched by Render backend
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     debugPrint('📱 [BeeWare] Foreground FCM message received from Render: ${message.messageId}');
+    if (!AlertService().pushEnabled || !AlertService().alertsEnabled) return;
     final title = message.notification?.title ?? message.data['title'] ?? '🐝 BeeWare Alert';
     final body = message.notification?.body ?? message.data['message'] ?? 'Anomaly detected in hive telemetry.';
+    String? targetDevice = (message.data['deviceId'] ?? message.data['hiveId'])?.toString();
+    if (targetDevice == null || targetDevice.isEmpty) {
+      final match = RegExp(r'BW-[A-Za-z0-9-]+').firstMatch('$title $body');
+      targetDevice = match?.group(0);
+    }
+    // Ignore FCM push notifications when the ESP32 device is unplugged or offline
+    if (targetDevice == null || !HiveService().isDeviceActivelyOnline(targetDevice)) {
+      debugPrint('🔕 [BeeWare] Ignored FCM notification for unplugged/offline device: $targetDevice');
+      return;
+    }
     NotificationService().showNotification(
       title: title,
       body: body,
-      payload: message.data['hiveId'] ?? message.data['deviceId'],
+      payload: targetDevice,
       severity: message.data['severity'],
     );
   });
@@ -162,10 +173,22 @@ class _MainNavigationState extends State<MainNavigation> {
     // Start HTTP polling for live ESP32 SQLite telemetry (30s interval to conserve data & battery)
     BackendService().startTelemetryPolling(interval: const Duration(seconds: 30));
 
+    // Clear any stale MaterialBanner if no device is actively online
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !HiveService().hasAnyActiveDevice) {
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
+      }
+    });
+
     // 0. In-app live sensor & acoustic anomaly notification banner
     _alertSub = AlertService().onAlertTriggered.listen((alert) {
       if (!mounted) return;
       if (!AlertService().alertsEnabled) return;
+      // Only show live alert banner if it's a manual test alert or the device is actively online
+      if (!alert.id.startsWith('test_alert_') &&
+          !HiveService().isDeviceActivelyOnline(alert.hiveId)) {
+        return;
+      }
       ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
       ScaffoldMessenger.of(context).showMaterialBanner(
         MaterialBanner(
@@ -217,14 +240,29 @@ class _MainNavigationState extends State<MainNavigation> {
     // 1. Foreground in-app notification banner
     _msgSub = FirebaseService().onMessageStream.listen((message) {
       if (!mounted) return;
-      if (!AlertService().pushEnabled) return;
+      if (!AlertService().pushEnabled || !AlertService().alertsEnabled) return;
       final notification = message.notification;
       final data = message.data;
       final hiveId = data['hiveId'] as String?;
+      final deviceId = data['deviceId'] as String?;
       final queenStatus = data['queenStatus'] as String?;
 
       final title = notification?.title ?? (queenStatus != null ? '⚠️ $queenStatus Detected!' : 'Hive Alert');
       final body = notification?.body ?? 'New sensor telemetry event recorded.';
+
+      String? targetId = deviceId ?? hiveId;
+      if (targetId == null || targetId.isEmpty) {
+        final match = RegExp(r'BW-[A-Za-z0-9-]+').firstMatch('$title $body');
+        targetId = match?.group(0);
+      }
+
+      // Do not show FCM banner if the ESP32 device is unplugged / offline
+      if (targetId == null || !HiveService().isDeviceActivelyOnline(targetId)) {
+        debugPrint('🔕 [FCM Foreground Alert Ignored - Device Unplugged/Offline] $title');
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
+        return;
+      }
+
       debugPrint('📥 [FCM Foreground Alert] $title: $body');
 
       ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
@@ -282,6 +320,16 @@ class _MainNavigationState extends State<MainNavigation> {
         }
       });
     } catch (_) {}
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !HiveService().hasAnyActiveDevice) {
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
+      }
+    });
   }
 
   @override

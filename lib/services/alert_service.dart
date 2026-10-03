@@ -211,35 +211,37 @@ class AlertService extends ChangeNotifier {
         }
       }
 
-      if (matchingHive != null) {
-        final bool hiveHasAcoustic = matchingHive.acoustic != '0 Hz' &&
-            !matchingHive.acoustic.startsWith('0') &&
-            !matchingHive.acousticStatus.toLowerCase().contains('not detected');
+      if (matchingHive == null) {
+        return true;
+      }
 
-        final bool isAcousticZeroAlert = alert.title.toLowerCase().contains('0 hz') ||
-            alert.title.toLowerCase().contains('acoustic') ||
-            alert.message.toLowerCase().contains('0 hz');
+      final bool hiveHasAcoustic = matchingHive.acoustic != '0 Hz' &&
+          !matchingHive.acoustic.startsWith('0') &&
+          !matchingHive.acousticStatus.toLowerCase().contains('not detected');
 
-        // If the hive is now detecting acoustics, any 0 Hz acoustic alert is resolved
-        if (isAcousticZeroAlert && hiveHasAcoustic) {
-          return true;
-        }
+      final bool isAcousticZeroAlert = alert.title.toLowerCase().contains('0 hz') ||
+          alert.title.toLowerCase().contains('acoustic') ||
+          alert.message.toLowerCase().contains('0 hz');
 
-        final tempVal = double.tryParse(matchingHive.temperature.replaceAll('°C', '').trim()) ?? 0.0;
-        if (alert.title.toLowerCase().contains('temperature') && tempVal > 0) {
-          return true;
-        }
+      // If the hive is now detecting acoustics, any 0 Hz acoustic alert is resolved
+      if (isAcousticZeroAlert && hiveHasAcoustic) {
+        return true;
+      }
 
-        final humVal = double.tryParse(matchingHive.humidity.replaceAll('%', '').trim()) ?? 0.0;
-        if (alert.title.toLowerCase().contains('humidity') && humVal > 0) {
-          return true;
-        }
+      final tempVal = double.tryParse(matchingHive.temperature.replaceAll('°C', '').trim()) ?? 0.0;
+      if (alert.title.toLowerCase().contains('temperature') && tempVal > 0) {
+        return true;
+      }
 
-        if ((alert.title.toLowerCase().contains('absent') || alert.title.toLowerCase().contains('rejected')) &&
-            matchingHive.conditionLabel == 'Queen Present' &&
-            hiveHasAcoustic) {
-          return true;
-        }
+      final humVal = double.tryParse(matchingHive.humidity.replaceAll('%', '').trim()) ?? 0.0;
+      if (alert.title.toLowerCase().contains('humidity') && humVal > 0) {
+        return true;
+      }
+
+      if ((alert.title.toLowerCase().contains('absent') || alert.title.toLowerCase().contains('rejected')) &&
+          matchingHive.conditionLabel == 'Queen Present' &&
+          hiveHasAcoustic) {
+        return true;
       }
 
       return false;
@@ -258,6 +260,12 @@ class AlertService extends ChangeNotifier {
 
     // 2. Derive alerts from live HiveData in HiveService
     for (final h in hives) {
+      final bool isHiveOffline = h.wifiStatus.toLowerCase() == 'offline' ||
+          h.updated.toLowerCase() == 'offline' ||
+          h.updated.contains('min ago') ||
+          h.updated.contains('hr ago') ||
+          h.updated.contains('days ago');
+
       // Missing sensor diagnostics (temp <= 0.0, hum <= 0.0, acoustic 0 Hz)
       final tempVal = double.tryParse(h.temperature.replaceAll('°C', '').trim());
       final isTempNotDetected = (tempVal != null && tempVal <= 0.0) || h.temperature == '0.0' || h.temperature == '0';
@@ -327,7 +335,9 @@ class AlertService extends ChangeNotifier {
             detectedBy: 'INMP441 Microphone Diagnostics',
           );
           result.add(alert);
-          _dispatchNotificationIfNew(alert);
+          if (!isHiveOffline) {
+            _dispatchNotificationIfNew(alert);
+          }
         }
       }
 
@@ -359,7 +369,8 @@ class AlertService extends ChangeNotifier {
             detectedBy: h.detectedBy,
           );
           result.add(alert);
-          if (alert.severity.toLowerCase() == 'critical' || alert.severity.toLowerCase() == 'warning') {
+          if (!isHiveOffline &&
+              (alert.severity.toLowerCase() == 'critical' || alert.severity.toLowerCase() == 'warning')) {
             _dispatchNotificationIfNew(alert);
           }
         }

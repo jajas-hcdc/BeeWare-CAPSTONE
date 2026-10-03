@@ -144,9 +144,7 @@ class BackendService {
     _isFetching = true;
     try {
       final records = await fetchTelemetryRecords(limit: 50);
-      if (records.isNotEmpty) {
-        HiveService().updateFromBackendTelemetry(records);
-      }
+      HiveService().updateFromBackendTelemetry(records);
     } finally {
       _isFetching = false;
     }

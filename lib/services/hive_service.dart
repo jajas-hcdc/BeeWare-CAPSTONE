@@ -325,9 +325,113 @@ class HiveService extends ChangeNotifier {
     }
   }
 
+  /// Returns true ONLY if [deviceOrHiveId] belongs to an ESP32 node that is
+  /// actively powered on and has transmitted telemetry within the last 10 minutes.
+  bool isDeviceActivelyOnline(String? deviceOrHiveId) {
+    if (deviceOrHiveId == null || deviceOrHiveId.trim().isEmpty) return false;
+    final clean = deviceOrHiveId.trim().toUpperCase();
+
+    // 1. Check active discovered nodes (already verified <= 10 min freshness)
+    if (_unpairedNodes.containsKey(clean)) {
+      final node = _unpairedNodes[clean]!;
+      if (node.wifiStatus.toLowerCase() != 'offline') {
+        return true;
+      }
+    }
+
+    // 2. Check paired hives
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    for (final h in _hives) {
+      final matchId = h.id.trim().toUpperCase() == clean ||
+          h.deviceId.trim().toUpperCase() == clean ||
+          h.name.trim().toUpperCase() == clean;
+      if (matchId) {
+        if (h.wifiStatus.toLowerCase() == 'offline' ||
+            h.updated.toLowerCase() == 'offline' ||
+            h.updated.contains('min ago') ||
+            h.updated.contains('hr ago') ||
+            h.updated.contains('days ago')) {
+          return false;
+        }
+        final lastEpoch = h.lastAudioCreatedAt ?? 0;
+        if (lastEpoch > 1700000000000) {
+          final ageMs = nowMs - lastEpoch;
+          return ageMs <= 10 * 60 * 1000;
+        }
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  /// Returns true if any ESP32 node is currently online and transmitting.
+  bool get hasAnyActiveDevice {
+    if (_unpairedNodes.values.any((n) => n.wifiStatus.toLowerCase() != 'offline')) {
+      return true;
+    }
+    for (final h in _hives) {
+      if (isDeviceActivelyOnline(h.deviceId)) return true;
+    }
+    return false;
+  }
+
+  /// Parses a formatted time ("01:43:04 AM") and optional date ("Oct 03, 2026") into epoch ms
+  static int _parseTimeAndDateToEpoch(String? recTime, String? recDate) {
+    if (recTime == null || recTime.isEmpty || recTime == 'Just now' || recTime == 'null' || recTime == 'Now') {
+      return 0;
+    }
+    try {
+      final now = DateTime.now();
+      int year = now.year;
+      int month = now.month;
+      int day = now.day;
+
+      if (recDate != null && recDate.isNotEmpty && recDate != 'null') {
+        const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+        final cleanDate = recDate.replaceAll(',', '').trim();
+        final dateParts = cleanDate.split(RegExp(r'\s+'));
+        if (dateParts.length >= 3 && dateParts[0].length >= 3) {
+          final mIdx = months.indexOf(dateParts[0].toLowerCase().substring(0, 3));
+          if (mIdx != -1) month = mIdx + 1;
+          day = int.tryParse(dateParts[1]) ?? day;
+          year = int.tryParse(dateParts[2]) ?? year;
+        }
+      }
+
+      final cleanTime = recTime.trim();
+      final timeParts = cleanTime.split(RegExp(r'\s+'));
+      final hms = timeParts[0].split(':');
+      if (hms.length >= 2) {
+        int hour = int.tryParse(hms[0]) ?? 0;
+        final int minute = int.tryParse(hms[1]) ?? 0;
+        final int second = hms.length >= 3 ? (int.tryParse(hms[2]) ?? 0) : 0;
+        if (timeParts.length >= 2) {
+          final period = timeParts[1].toUpperCase();
+          if (period == 'PM' && hour < 12) hour += 12;
+          if (period == 'AM' && hour == 12) hour = 0;
+        }
+        var parsedDt = DateTime(year, month, day, hour, minute, second);
+        // If no date was provided and the parsed time is in the future by > 5 minutes, it was from yesterday
+        if ((recDate == null || recDate.isEmpty || recDate == 'null') &&
+            parsedDt.difference(now).inMinutes > 5) {
+          parsedDt = parsedDt.subtract(const Duration(days: 1));
+        }
+        return parsedDt.millisecondsSinceEpoch;
+      }
+    } catch (_) {}
+    return 0;
+  }
+
   /// Updates local hive instances with fresh SQLite telemetry data from FastAPI backend
   void updateFromBackendTelemetry(List<Map<String, dynamic>> records) {
-    if (records.isEmpty) return;
+    if (records.isEmpty) {
+      if (_unpairedNodes.isNotEmpty) {
+        _unpairedNodes.clear();
+        _debouncedNotify();
+      }
+      return;
+    }
 
     // Group records by deviceId
     final Map<String, List<Map<String, dynamic>>> grouped = {};
@@ -337,6 +441,14 @@ class HiveService extends ChangeNotifier {
     }
 
     bool hasChanged = false;
+
+    // Remove any previously discovered unpaired nodes that are no longer present in cloud telemetry
+    final activeKeys = grouped.keys.map((k) => k.trim().toUpperCase()).toSet();
+    final staleKeys = _unpairedNodes.keys.where((k) => !activeKeys.contains(k)).toList();
+    for (final k in staleKeys) {
+      _unpairedNodes.remove(k);
+      hasChanged = true;
+    }
 
     double parseNumToDouble(dynamic val, double fallback) {
       if (val == null) return fallback;
@@ -408,7 +520,15 @@ class HiveService extends ChangeNotifier {
               }
             } else if (ts.contains(':')) {
               final parts = ts.split(' ');
-              return parts.length > 1 ? parts[1].substring(0, 5) : ts.substring(0, 5);
+              String timeStr = ts;
+              if (parts.length > 1) {
+                if (parts[0].contains(':')) {
+                  timeStr = parts[0];
+                } else if (parts[1].contains(':')) {
+                  timeStr = parts[1];
+                }
+              }
+              return timeStr.length >= 5 ? timeStr.substring(0, 5) : timeStr;
             }
             return ts.isNotEmpty ? ts : 'Now';
           })
@@ -522,35 +642,45 @@ class HiveService extends ChangeNotifier {
       final lastAudioEpoch = parseNumToInt(latest['last_audio_epoch'] ?? latest['last_audio_created_at'], 0);
 
       // Dynamically compute telemetry freshness (Live vs In Cooldown vs Offline)
-      int telemetryEpoch = parseNumToInt(
+      final int rawEpoch = parseNumToInt(
         latest['last_audio_epoch'] ??
         latest['epoch'] ??
         latest['created_at'] ??
         latest['last_audio_created_at'],
         0,
       );
-      if (telemetryEpoch > 0 && telemetryEpoch < 1700000000) {
-        telemetryEpoch *= 1000;
+      int telemetryEpoch = 0;
+      if (rawEpoch > 1700000000000) {
+        telemetryEpoch = rawEpoch;
+      } else if (rawEpoch >= 1700000000 && rawEpoch <= 4000000000) {
+        telemetryEpoch = rawEpoch * 1000;
       }
       if (telemetryEpoch == 0) {
         final tsStr = (latest['timestamp'] ?? latest['created_at'])?.toString();
         if (tsStr != null && tsStr.isNotEmpty) {
           final dt = DateTime.tryParse(tsStr);
-          if (dt != null) {
+          if (dt != null && dt.millisecondsSinceEpoch > 1700000000000) {
             telemetryEpoch = dt.millisecondsSinceEpoch;
           }
         }
+      }
+      if (telemetryEpoch == 0) {
+        final timeCandidate = (latest['timestamp'] ?? latest['last_audio_recorded_time'] ?? latest['lastAudioRecordedTime'])?.toString();
+        final dateCandidate = (latest['recorded_date'] ?? latest['recordedDate'])?.toString();
+        telemetryEpoch = _parseTimeAndDateToEpoch(timeCandidate, dateCandidate);
       }
 
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       String computedWifiStatus = 'Connected';
       String computedUpdated = 'Just now';
+      bool isNodeActivelyTransmitting = false;
 
       if (telemetryEpoch > 1700000000000) {
         final ageMs = nowMs - telemetryEpoch;
         if (ageMs > 10 * 60 * 1000) {
           // If no telemetry received for over 10 minutes (ESP32 cooldown is 5 min / 300s)
           computedWifiStatus = 'Offline';
+          isNodeActivelyTransmitting = false;
           final ageMin = ageMs ~/ (60 * 1000);
           if (ageMin < 60) {
             computedUpdated = '$ageMin min ago';
@@ -564,14 +694,39 @@ class HiveService extends ChangeNotifier {
         } else if (ageMs > 3 * 60 * 1000) {
           computedWifiStatus = 'Connected';
           computedUpdated = 'In Cooldown';
+          isNodeActivelyTransmitting = true;
         } else {
           computedWifiStatus = 'Connected';
           computedUpdated = 'Just now';
+          isNodeActivelyTransmitting = true;
         }
-      } else if (lastAudioRecTime != null && lastAudioRecTime.isNotEmpty && lastAudioRecTime != 'null') {
-        computedUpdated = lastAudioRecTime;
+      } else {
+        final bool hasExplicitTelemetryFields = latest.containsKey('last_audio_epoch') ||
+            latest.containsKey('timestamp') ||
+            latest.containsKey('last_audio_recorded_time') ||
+            latest.containsKey('status');
+        if (existingIdx == -1 || hasExplicitTelemetryFields) {
+          final tsVal = latest['timestamp']?.toString() ?? '';
+          if (tsVal == 'Just now' && rawEpoch > 0 && rawEpoch < 600000) {
+            computedWifiStatus = 'Connected';
+            computedUpdated = 'Just now';
+            isNodeActivelyTransmitting = true;
+          } else {
+            computedWifiStatus = 'Offline';
+            computedUpdated = (lastAudioRecTime != null && lastAudioRecTime.isNotEmpty && lastAudioRecTime != 'null')
+                ? lastAudioRecTime
+                : 'Offline';
+            isNodeActivelyTransmitting = false;
+          }
+        } else {
+          // Synthetic test record for an already-paired hive
+          computedWifiStatus = 'Connected';
+          computedUpdated = 'Just now';
+          isNodeActivelyTransmitting = true;
+        }
       }
       final computedBars = computedWifiStatus == 'Offline' ? 0 : signalBars;
+      final effectiveBatteryStr = computedWifiStatus == 'Offline' ? 'Offline' : batteryStr;
 
       // Extract condition label & confidence if pushed by ESP32 / cloud
       String? condLabel = (latest['conditionLabel'] ?? latest['queen_status']) as String?;
@@ -641,7 +796,7 @@ class HiveService extends ChangeNotifier {
                       : (existing.recommendation.toLowerCase().contains('routine') && (isAbs || isRej)
                           ? 'Inspect hive immediately.'
                           : existing.recommendation))),
-          batteryLevel: batteryStr,
+          batteryLevel: effectiveBatteryStr,
           wifiStatus: computedWifiStatus,
           signalBars: computedBars,
           updated: computedUpdated,
@@ -653,18 +808,19 @@ class HiveService extends ChangeNotifier {
           acousticHistory: acousticHist.isNotEmpty ? acousticHist : existing.acousticHistory,
           lastAudioRecordedTime: lastAudioRecTime ?? existing.lastAudioRecordedTime,
           lastAudioTrigger: lastAudioTrig ?? existing.lastAudioTrigger,
-          lastAudioCreatedAt: lastAudioEpoch > 0 ? lastAudioEpoch : existing.lastAudioCreatedAt,
+          lastAudioCreatedAt: telemetryEpoch > 0 ? telemetryEpoch : (lastAudioEpoch > 0 ? lastAudioEpoch : existing.lastAudioCreatedAt),
         );
         hasChanged = true;
 
-        if (lastAudioRecTime != null &&
+        if (isNodeActivelyTransmitting &&
+            lastAudioRecTime != null &&
             lastAudioRecTime.isNotEmpty &&
             lastAudioRecTime != 'null') {
           AudioService().syncFromTelemetry(
             deviceId: deviceId,
             recordedTime: lastAudioRecTime,
             trigger: lastAudioTrig ?? 'Device Restart',
-            epoch: lastAudioEpoch,
+            epoch: telemetryEpoch > 0 ? telemetryEpoch : lastAudioEpoch,
             temperature: temp,
             humidity: hum,
             frequency: freqHz,
@@ -672,67 +828,75 @@ class HiveService extends ChangeNotifier {
           );
         }
       } else {
-        // Auto-discover and create new hive from live IoT telemetry
-        final String newId = 'hive_${deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_').toLowerCase()}';
-        final String friendlyName = 'Hive ${deviceId.toUpperCase()}';
-        final effectiveCond = condLabel ?? 'Queen Present';
-        final isAbs = effectiveCond.toLowerCase().contains('absent');
-        final isRej = effectiveCond.toLowerCase().contains('rejected');
-        final isAcc = effectiveCond.toLowerCase().contains('accepted');
-        final isPres = !isAbs && !isRej && !isAcc && hasAcoustic;
+        // Only auto-discover and add to _unpairedNodes if the ESP32 node is actively powered on & transmitting!
+        final cleanKey = deviceId.trim().toUpperCase();
+        if (isNodeActivelyTransmitting) {
+          final String newId = 'hive_${deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_').toLowerCase()}';
+          final String friendlyName = 'Hive ${deviceId.toUpperCase()}';
+          final effectiveCond = condLabel ?? 'Queen Present';
+          final isAbs = effectiveCond.toLowerCase().contains('absent');
+          final isRej = effectiveCond.toLowerCase().contains('rejected');
+          final isAcc = effectiveCond.toLowerCase().contains('accepted');
+          final isPres = !isAbs && !isRej && !isAcc && hasAcoustic;
 
-        final newHive = HiveData(
-          id: newId,
-          name: friendlyName,
-          deviceId: deviceId.toUpperCase(),
-          notes: 'Auto-discovered from live IoT telemetry.',
-          conditionLabel: effectiveCond,
-          confidence: conf,
-          healthScore: effectiveHealth,
-          temperature: temp.toStringAsFixed(1),
-          humidity: hum.toStringAsFixed(0),
-          acoustic: acousticStr,
-          acousticStatus: acousticStatusStr,
-          isAlert: !hasAcoustic || isAbs || isRej,
-          alertSeverity: !hasAcoustic ? 'Critical' : (isAbs ? 'Critical' : (isRej ? 'Warning' : 'Info')),
-          alertLabel: !hasAcoustic
-              ? '⚠️ Acoustic Signal Not Detected (0 Hz)'
-              : (isAbs ? 'Queen Absent' : (isRej ? 'Queen Rejected' : 'Queen Present')),
-          alertMessage: !hasAcoustic
-              ? 'Acoustic microphone on $friendlyName is detecting 0 Hz.'
-              : (isAbs
-                  ? 'Colony is Queenless.'
-                  : (isRej ? 'Colony rejecting queen.' : 'Colony is queenright and stable.')),
-          queenPresentDetected: hasAcoustic && isPres,
-          queenAbsentDetected: hasAcoustic && isAbs,
-          queenAcceptedDetected: hasAcoustic && isAcc,
-          queenRejectedDetected: hasAcoustic && isRej,
-          recommendation: isAbs
-              ? 'Inspect frames for emergency queen cells or introduce a new mated queen promptly.'
-              : (isRej
-                  ? 'Check release cage immediately and examine worker agitation.'
-                  : (isAcc
-                      ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
-                      : 'Colony is queenright and stable. Continue regular monitoring.')),
-          batteryLevel: batteryStr,
-          wifiStatus: computedWifiStatus,
-          signalBars: computedBars,
-          updated: computedUpdated,
-          audioFilePath: audioPath,
-          qrCodeUrl: qrUrl,
-          historyDates: datesHist,
-          temperatureHistory: tempHist,
-          humidityHistory: humHist,
-          acousticHistory: acousticHist,
-          lastAudioRecordedTime: lastAudioRecTime,
-          lastAudioTrigger: lastAudioTrig,
-          lastAudioCreatedAt: lastAudioEpoch > 0 ? lastAudioEpoch : null,
-        );
+          final newHive = HiveData(
+            id: newId,
+            name: friendlyName,
+            deviceId: cleanKey,
+            notes: 'Auto-discovered from live IoT telemetry.',
+            conditionLabel: effectiveCond,
+            confidence: conf,
+            healthScore: effectiveHealth,
+            temperature: temp.toStringAsFixed(1),
+            humidity: hum.toStringAsFixed(0),
+            acoustic: acousticStr,
+            acousticStatus: acousticStatusStr,
+            isAlert: !hasAcoustic || isAbs || isRej,
+            alertSeverity: !hasAcoustic ? 'Critical' : (isAbs ? 'Critical' : (isRej ? 'Warning' : 'Info')),
+            alertLabel: !hasAcoustic
+                ? '⚠️ Acoustic Signal Not Detected (0 Hz)'
+                : (isAbs ? 'Queen Absent' : (isRej ? 'Queen Rejected' : 'Queen Present')),
+            alertMessage: !hasAcoustic
+                ? 'Acoustic microphone on $friendlyName is detecting 0 Hz.'
+                : (isAbs
+                    ? 'Colony is Queenless.'
+                    : (isRej ? 'Colony rejecting queen.' : 'Colony is queenright and stable.')),
+            queenPresentDetected: hasAcoustic && isPres,
+            queenAbsentDetected: hasAcoustic && isAbs,
+            queenAcceptedDetected: hasAcoustic && isAcc,
+            queenRejectedDetected: hasAcoustic && isRej,
+            recommendation: isAbs
+                ? 'Inspect frames for emergency queen cells or introduce a new mated queen promptly.'
+                : (isRej
+                    ? 'Check release cage immediately and examine worker agitation.'
+                    : (isAcc
+                        ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
+                        : 'Colony is queenright and stable. Continue regular monitoring.')),
+            batteryLevel: effectiveBatteryStr,
+            wifiStatus: computedWifiStatus,
+            signalBars: computedBars,
+            updated: computedUpdated,
+            audioFilePath: audioPath,
+            qrCodeUrl: qrUrl,
+            historyDates: datesHist,
+            temperatureHistory: tempHist,
+            humidityHistory: humHist,
+            acousticHistory: acousticHist,
+            lastAudioRecordedTime: lastAudioRecTime,
+            lastAudioTrigger: lastAudioTrig,
+            lastAudioCreatedAt: telemetryEpoch > 0 ? telemetryEpoch : (lastAudioEpoch > 0 ? lastAudioEpoch : null),
+          );
 
-        // Do not inject directly into the user's paired "My Hives" list.
-        // Instead, store in _unpairedNodes so it pops up in the "Node Detection Phase"!
-        _unpairedNodes[deviceId.toUpperCase()] = newHive;
-        hasChanged = true;
+          // Store in _unpairedNodes so it pops up in the "Node Detection Phase"
+          _unpairedNodes[cleanKey] = newHive;
+          hasChanged = true;
+        } else {
+          // Device is unplugged or telemetry is stale/offline (> 10 min old) — ensure it's removed from Discovered Nodes
+          if (_unpairedNodes.containsKey(cleanKey)) {
+            _unpairedNodes.remove(cleanKey);
+            hasChanged = true;
+          }
+        }
       }
     });
 

@@ -272,5 +272,47 @@ void main() {
       expect(find.text('No Buzz Detected'), findsWidgets);
       expect(find.text('0%'), findsWidgets);
     });
+
+    test('updateFromBackendTelemetry does not add stale/unplugged node to unpairedNodes', () {
+      hiveService.clearDiscoveredNodes();
+      final staleEpoch = DateTime.now().subtract(const Duration(minutes: 25)).millisecondsSinceEpoch;
+
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-UNPLUGGED-99',
+          'temperature': 28.3,
+          'humidity': 77.0,
+          'frequency': 86,
+          'power_source': 'Plugged In',
+          'last_audio_epoch': staleEpoch,
+          'timestamp': '01:43:04 AM',
+        }
+      ]);
+
+      expect(hiveService.unpairedNodes.any((n) => n.deviceId == 'BW-UNPLUGGED-99'), isFalse);
+    });
+
+    test('updateFromBackendTelemetry adds actively transmitting node to unpairedNodes and clears on empty', () {
+      hiveService.clearDiscoveredNodes();
+      final liveEpoch = DateTime.now().subtract(const Duration(seconds: 45)).millisecondsSinceEpoch;
+
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-LIVE-101',
+          'temperature': 34.2,
+          'humidity': 65.0,
+          'frequency': 185,
+          'power_source': 'Plugged In',
+          'last_audio_epoch': liveEpoch,
+          'timestamp': 'Just now',
+        }
+      ]);
+
+      expect(hiveService.unpairedNodes.any((n) => n.deviceId == 'BW-LIVE-101'), isTrue);
+
+      // When telemetry is refreshed and empty (e.g., deleted in Firebase or device offline), unpairedNodes clears
+      hiveService.updateFromBackendTelemetry([]);
+      expect(hiveService.unpairedNodes.isEmpty, isTrue);
+    });
   });
 }
