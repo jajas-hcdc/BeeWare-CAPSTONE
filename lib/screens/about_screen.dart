@@ -70,7 +70,7 @@ class AboutBeeWareScreen extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Text(
-                'Robles, Joshua\nPugoot, Justine\nLedesma, Earl Andre\nOviedo, Alexa',
+                'Robles, Joshua\nPugosa, Justine\nLedesma, Earl Andre\nOviedo, Alexa',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 13,
