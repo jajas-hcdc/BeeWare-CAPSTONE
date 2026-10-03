@@ -101,7 +101,71 @@ class NotificationService {
     }
   }
 
-  /// Displays a native system pop-up notification (Heads-Up Banner on phone)
+  OverlayEntry? _activeBannerEntry;
+
+  /// Tracks the last anomaly notification shown per device key so duplicate
+  /// triggers (e.g. local telemetry check + cloud FCM push for the same anomaly)
+  /// only produce a single notification.
+  final Map<String, ({String category, DateTime timestamp})> _lastNotifiedByDevice = {};
+
+  static const Duration _dedupCooldown = Duration(minutes: 15);
+
+  /// Extracts a normalized device/hive key (e.g. "BW-08266C") from payload, title, or body.
+  static String extractDeviceKey({String? payload, required String title, required String body}) {
+    final combined = '${payload ?? ''} $title $body';
+    final bwMatch = RegExp(r'BW-[A-Za-z0-9-]+', caseSensitive: false).firstMatch(combined);
+    if (bwMatch != null) {
+      return bwMatch.group(0)!.toUpperCase();
+    }
+    if (payload != null && payload.trim().isNotEmpty) {
+      return payload.trim().toUpperCase();
+    }
+    return 'BEEWARE_GENERAL';
+  }
+
+  /// Maps an alert's title and body to a canonical anomaly category so equivalent
+  /// alerts from different sources (local sensor check vs. FCM push) are recognized as the same anomaly.
+  static String classifyAnomalyCategory(String title, String body) {
+    final text = '$title $body'.toLowerCase();
+    if (text.contains('test_alert') || text.contains('system verified')) {
+      return 'test_alert';
+    }
+    if (text.contains('0 hz') ||
+        text.contains('not detected') ||
+        text.contains('sensor alert') ||
+        text.contains('sensor(s) not detected') ||
+        text.contains('0.0 °c') ||
+        text.contains('0.0°c') ||
+        text.contains('returning 0%')) {
+      return 'sensor_not_detected';
+    }
+    if (text.contains('absent') || text.contains('queenless')) {
+      return 'queen_absent';
+    }
+    if (text.contains('rejected') || text.contains('rejecting')) {
+      return 'queen_rejected';
+    }
+    if (text.contains('temp')) {
+      return 'temperature_anomaly';
+    }
+    if (text.contains('humid')) {
+      return 'humidity_anomaly';
+    }
+    if (text.contains('battery')) {
+      return 'low_battery';
+    }
+    return title.trim().toLowerCase();
+  }
+
+  /// Clears the deduplication cooldown for a device once its anomaly is resolved,
+  /// allowing future anomalies to notify immediately.
+  void clearDeviceNotificationState(String deviceOrHiveId) {
+    final key = extractDeviceKey(payload: deviceOrHiveId, title: '', body: '');
+    _lastNotifiedByDevice.remove(key);
+  }
+
+  /// Displays a native system pop-up notification (Heads-Up Banner on phone).
+  /// Deduplicates by device and anomaly category so only ONE notification is sent per anomaly.
   Future<void> showNotification({
     int? id,
     required String title,
@@ -109,6 +173,23 @@ class NotificationService {
     String? payload,
     String? severity,
   }) async {
+    final deviceKey = extractDeviceKey(payload: payload, title: title, body: body);
+    final category = classifyAnomalyCategory(title, body);
+    final now = DateTime.now();
+
+    if (category != 'test_alert') {
+      final previous = _lastNotifiedByDevice[deviceKey];
+      if (previous != null &&
+          previous.category == category &&
+          now.difference(previous.timestamp) < _dedupCooldown) {
+        debugPrint(
+          '🔕 [BeeWare] Suppressed duplicate notification for $deviceKey ($category): "$title"',
+        );
+        return;
+      }
+      _lastNotifiedByDevice[deviceKey] = (category: category, timestamp: now);
+    }
+
     if (_isTesting) {
       _showInAppTopBanner(title, body, severity: severity);
       return;
@@ -118,7 +199,10 @@ class NotificationService {
       await initialize();
     }
 
-    final notifId = id ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // Use a single deterministic notification ID per device so Android updates
+    // the existing notification slot instead of stacking multiple notifications.
+    final int notifId = deviceKey.hashCode & 0x7FFFFFFF;
+    final String notifTag = 'beeware_alert_$deviceKey';
 
     final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       channelId,
@@ -127,9 +211,11 @@ class NotificationService {
       importance: Importance.max,
       priority: Priority.high,
       ticker: 'BeeWare Notification',
+      tag: notifTag,
       icon: '@mipmap/ic_launcher',
       playSound: true,
       enableVibration: true,
+      onlyAlertOnce: true,
       styleInformation: BigTextStyleInformation(
         body,
         contentTitle: title,
@@ -154,9 +240,9 @@ class NotificationService {
         title: title,
         body: body,
         notificationDetails: notificationDetails,
-        payload: payload,
+        payload: payload ?? deviceKey,
       );
-      debugPrint('🔔 [BeeWare] Pop-up notification posted: "$title" - "$body"');
+      debugPrint('🔔 [BeeWare] Pop-up notification posted ($deviceKey / $category): "$title" - "$body"');
     } catch (e) {
       debugPrint('❌ [BeeWare] Failed to show system notification: $e');
     }
@@ -186,6 +272,14 @@ class NotificationService {
       final overlay = Overlay.maybeOf(context);
       if (overlay == null) return;
 
+      // Remove any existing banner so only one banner is ever visible at a time
+      if (_activeBannerEntry != null) {
+        if (_activeBannerEntry!.mounted) {
+          _activeBannerEntry!.remove();
+        }
+        _activeBannerEntry = null;
+      }
+
       Color accentColor = const Color(0xFFFFCC00);
       IconData icon = Icons.notifications_active;
 
@@ -209,17 +303,26 @@ class NotificationService {
           accentColor: accentColor,
           icon: icon,
           onDismiss: () {
-            entry.remove();
+            if (entry.mounted) {
+              entry.remove();
+            }
+            if (_activeBannerEntry == entry) {
+              _activeBannerEntry = null;
+            }
           },
         ),
       );
 
+      _activeBannerEntry = entry;
       overlay.insert(entry);
 
       // Auto-dismiss after 4.5 seconds
       Future.delayed(const Duration(milliseconds: 4500), () {
         if (entry.mounted) {
           entry.remove();
+        }
+        if (_activeBannerEntry == entry) {
+          _activeBannerEntry = null;
         }
       });
     } catch (e) {

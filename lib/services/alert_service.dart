@@ -259,12 +259,15 @@ class AlertService extends ChangeNotifier {
     }
 
     // 2. Derive alerts from live HiveData in HiveService
+    final Set<String> activeDispatchKeys = {};
     for (final h in hives) {
-      final bool isHiveOffline = h.wifiStatus.toLowerCase() == 'offline' ||
-          h.updated.toLowerCase() == 'offline' ||
-          h.updated.contains('min ago') ||
-          h.updated.contains('hr ago') ||
-          h.updated.contains('days ago');
+      final String deviceKey = (h.deviceId.trim().isNotEmpty ? h.deviceId.trim() : h.id.trim()).toUpperCase();
+      final bool isOnline = HiveService().isDeviceActivelyOnline(deviceKey);
+      final String displayHiveName = h.name.toUpperCase().contains(deviceKey)
+          ? h.name
+          : '${h.name} ($deviceKey)';
+
+      AlertModel? primaryNotificationAlert;
 
       // Missing sensor diagnostics (temp <= 0.0, hum <= 0.0, acoustic 0 Hz)
       final tempVal = double.tryParse(h.temperature.replaceAll('°C', '').trim());
@@ -283,19 +286,19 @@ class AlertService extends ChangeNotifier {
         final alertId = 'sensor_temp_not_detected_${h.id}';
         if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
           seenIds.add(alertId);
-          result.add(
-            AlertModel(
-              id: alertId,
-              hiveId: h.name,
-              queenStatus: h.conditionLabel,
-              title: '⚠️ Temperature Sensor Not Detected',
-              message: 'Temperature sensor on ${h.name} (${h.deviceId}) is returning 0.0 °C. Check DHT22 connection.',
-              severity: 'Critical',
-              timestamp: DateTime.now(),
-              recommendation: 'Inspect DHT22 data pin (GPIO 4), 10k pull-up resistor, and 3.3V power line.',
-              detectedBy: 'Hardware Sensor Diagnostics',
-            ),
+          final alert = AlertModel(
+            id: alertId,
+            hiveId: h.name,
+            queenStatus: h.conditionLabel,
+            title: '⚠️ Temperature Sensor Not Detected',
+            message: 'Temperature sensor on $displayHiveName is returning 0.0 °C. Check DHT22 connection.',
+            severity: 'Critical',
+            timestamp: DateTime.now(),
+            recommendation: 'Inspect DHT22 data pin (GPIO 4), 10k pull-up resistor, and 3.3V power line.',
+            detectedBy: 'Hardware Sensor Diagnostics',
           );
+          result.add(alert);
+          primaryNotificationAlert ??= alert;
         }
       }
 
@@ -303,19 +306,19 @@ class AlertService extends ChangeNotifier {
         final alertId = 'sensor_hum_not_detected_${h.id}';
         if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
           seenIds.add(alertId);
-          result.add(
-            AlertModel(
-              id: alertId,
-              hiveId: h.name,
-              queenStatus: h.conditionLabel,
-              title: '⚠️ Humidity Sensor Not Detected',
-              message: 'Humidity sensor on ${h.name} (${h.deviceId}) is returning 0%. Check DHT22 connection.',
-              severity: 'Warning',
-              timestamp: DateTime.now(),
-              recommendation: 'Inspect DHT22 sensor pin (GPIO 4) and verify contacts are clean and dry.',
-              detectedBy: 'Hardware Sensor Diagnostics',
-            ),
+          final alert = AlertModel(
+            id: alertId,
+            hiveId: h.name,
+            queenStatus: h.conditionLabel,
+            title: '⚠️ Humidity Sensor Not Detected',
+            message: 'Humidity sensor on $displayHiveName is returning 0%. Check DHT22 connection.',
+            severity: 'Warning',
+            timestamp: DateTime.now(),
+            recommendation: 'Inspect DHT22 sensor pin (GPIO 4) and verify contacts are clean and dry.',
+            detectedBy: 'Hardware Sensor Diagnostics',
           );
+          result.add(alert);
+          primaryNotificationAlert ??= alert;
         }
       }
 
@@ -328,20 +331,25 @@ class AlertService extends ChangeNotifier {
             hiveId: h.name,
             queenStatus: h.conditionLabel,
             title: '⚠️ Acoustic Signal Not Detected (0 Hz)',
-            message: 'Acoustic microphone on ${h.name} (${h.deviceId}) is detecting 0 Hz (silent or disconnected).',
+            message: 'Acoustic microphone on $displayHiveName is detecting 0 Hz (silent or disconnected).',
             severity: 'Critical',
             timestamp: DateTime.now(),
-            recommendation: 'Verify INMP441 I2S wiring: BCLK (GPIO 14), WS (GPIO 15), SD (GPIO 32), and L/R to GND.',
+            recommendation: 'Verify INMP441 I2S wiring: SCK (GPIO 32), WS (GPIO 25), SD (GPIO 33), and L/R to GND.',
             detectedBy: 'INMP441 Microphone Diagnostics',
           );
           result.add(alert);
-          if (!isHiveOffline) {
-            _dispatchNotificationIfNew(alert);
-          }
+          primaryNotificationAlert = alert;
         }
       }
 
-      if (h.isAlert &&
+      // Only create a separate colony condition alert if it is NOT already covered by the 0 Hz acoustic sensor alert
+      final bool isDuplicateAcousticAlert = isAcousticNotDetected &&
+          (h.alertLabel.toLowerCase().contains('0 hz') ||
+              h.alertLabel.toLowerCase().contains('acoustic') ||
+              h.alertMessage.toLowerCase().contains('0 hz'));
+
+      if (!isDuplicateAcousticAlert &&
+          h.isAlert &&
           (h.alertSeverity.toLowerCase() == 'critical' ||
               h.alertSeverity.toLowerCase() == 'warning' ||
               h.queenAbsentDetected ||
@@ -369,16 +377,30 @@ class AlertService extends ChangeNotifier {
             detectedBy: h.detectedBy,
           );
           result.add(alert);
-          if (!isHiveOffline &&
-              (alert.severity.toLowerCase() == 'critical' || alert.severity.toLowerCase() == 'warning')) {
-            _dispatchNotificationIfNew(alert);
+          if (alert.severity.toLowerCase() == 'critical' || alert.severity.toLowerCase() == 'warning') {
+            primaryNotificationAlert = alert;
           }
         }
+      }
+
+      // Dispatch at most ONE notification per online hive when an anomaly is active
+      if (primaryNotificationAlert != null) {
+        final category = NotificationService.classifyAnomalyCategory(
+          primaryNotificationAlert.title,
+          primaryNotificationAlert.message,
+        );
+        final dispatchKey = '${deviceKey}_$category';
+        activeDispatchKeys.add(dispatchKey);
+        if (isOnline) {
+          _dispatchNotificationIfNew(deviceKey, dispatchKey, primaryNotificationAlert);
+        }
+      } else {
+        NotificationService().clearDeviceNotificationState(deviceKey);
       }
     }
 
     // Clear resolved alerts from dispatched set so future anomalies trigger again
-    _dispatchedNotificationIds.removeWhere((id) => !seenIds.contains(id));
+    _dispatchedNotificationIds.removeWhere((key) => !activeDispatchKeys.contains(key));
 
     // Sort by timestamp newest first
     result.sort((a, b) => b.timestamp.compareTo(a.timestamp));
@@ -388,36 +410,25 @@ class AlertService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _dispatchNotificationIfNew(AlertModel alert) {
+  void _dispatchNotificationIfNew(String deviceKey, String dispatchKey, AlertModel alert) {
     if (!_alertsEnabled) return;
-    if (!_dispatchedNotificationIds.contains(alert.id)) {
-      _dispatchedNotificationIds.add(alert.id);
+    if (!HiveService().isDeviceActivelyOnline(deviceKey)) return;
+    if (!_dispatchedNotificationIds.contains(dispatchKey)) {
+      _dispatchedNotificationIds.add(dispatchKey);
       _alertNotificationController.add(alert);
 
-      // Trigger native phone pop-up notification and in-app heads-up banner
+      final bool msgAlreadyHasHive = alert.message.toLowerCase().contains(alert.hiveId.toLowerCase()) ||
+          alert.message.toUpperCase().contains(deviceKey);
+      final String cleanBody = msgAlreadyHasHive ? alert.message : '${alert.hiveId}: ${alert.message}';
+
+      // Trigger a single native phone pop-up notification and in-app heads-up banner
       NotificationService().showNotification(
-        id: alert.id.hashCode,
+        id: deviceKey.hashCode & 0x7FFFFFFF,
         title: alert.title,
-        body: '${alert.hiveId}: ${alert.message}',
-        payload: alert.id,
+        body: cleanBody,
+        payload: deviceKey,
         severity: alert.severity,
       );
-
-      // Also sync to cloud Realtime Database for push/remote notifications
-      if (_pushEnabled) {
-        try {
-          BackendService().sendAlert(
-            hiveId: alert.hiveId,
-            queenStatus: alert.queenStatus,
-            title: alert.title,
-            message: alert.message,
-            severity: alert.severity,
-            recommendation: alert.recommendation,
-          );
-        } catch (e) {
-          debugPrint('Cloud alert dispatch skipped: $e');
-        }
-      }
     }
   }
 

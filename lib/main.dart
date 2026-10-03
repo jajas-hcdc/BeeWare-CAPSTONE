@@ -161,9 +161,7 @@ class MainNavigation extends StatefulWidget {
 class _MainNavigationState extends State<MainNavigation> {
   int _selectedIndex = 0;
   late final PageController _pageController;
-  StreamSubscription? _msgSub;
   StreamSubscription? _msgOpenedSub;
-  StreamSubscription? _alertSub;
 
   @override
   void initState() {
@@ -173,134 +171,11 @@ class _MainNavigationState extends State<MainNavigation> {
     // Start HTTP polling for live ESP32 SQLite telemetry (30s interval to conserve data & battery)
     BackendService().startTelemetryPolling(interval: const Duration(seconds: 30));
 
-    // Clear any stale MaterialBanner if no device is actively online
+    // Clear any stale MaterialBanner
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !HiveService().hasAnyActiveDevice) {
+      if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
       }
-    });
-
-    // 0. In-app live sensor & acoustic anomaly notification banner
-    _alertSub = AlertService().onAlertTriggered.listen((alert) {
-      if (!mounted) return;
-      if (!AlertService().alertsEnabled) return;
-      // Only show live alert banner if it's a manual test alert or the device is actively online
-      if (!alert.id.startsWith('test_alert_') &&
-          !HiveService().isDeviceActivelyOnline(alert.hiveId)) {
-        return;
-      }
-      ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-      ScaffoldMessenger.of(context).showMaterialBanner(
-        MaterialBanner(
-          backgroundColor: const Color(0xFFFFEBEE),
-          leading: const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 28),
-          content: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                alert.title,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 13,
-                  color: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                alert.message,
-                style: const TextStyle(fontSize: 11, color: Colors.black87),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
-              child: const Text('Dismiss', style: TextStyle(color: Colors.black54, fontWeight: FontWeight.bold)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-                elevation: 0,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: () {
-                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-                _navigateToHive(alert.hiveId);
-              },
-              child: const Text('Inspect Hive', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-          ],
-        ),
-      );
-    });
-
-    // 1. Foreground in-app notification banner
-    _msgSub = FirebaseService().onMessageStream.listen((message) {
-      if (!mounted) return;
-      if (!AlertService().pushEnabled || !AlertService().alertsEnabled) return;
-      final notification = message.notification;
-      final data = message.data;
-      final hiveId = data['hiveId'] as String?;
-      final deviceId = data['deviceId'] as String?;
-      final queenStatus = data['queenStatus'] as String?;
-
-      final title = notification?.title ?? (queenStatus != null ? '⚠️ $queenStatus Detected!' : 'Hive Alert');
-      final body = notification?.body ?? 'New sensor telemetry event recorded.';
-
-      String? targetId = deviceId ?? hiveId;
-      if (targetId == null || targetId.isEmpty) {
-        final match = RegExp(r'BW-[A-Za-z0-9-]+').firstMatch('$title $body');
-        targetId = match?.group(0);
-      }
-
-      // Do not show FCM banner if the ESP32 device is unplugged / offline
-      if (targetId == null || !HiveService().isDeviceActivelyOnline(targetId)) {
-        debugPrint('🔕 [FCM Foreground Alert Ignored - Device Unplugged/Offline] $title');
-        ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
-        return;
-      }
-
-      debugPrint('📥 [FCM Foreground Alert] $title: $body');
-
-      ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-      ScaffoldMessenger.of(context).showMaterialBanner(
-        MaterialBanner(
-          backgroundColor: const Color(0xFFFFF8E1),
-          leading: const Icon(Icons.warning_amber_rounded, color: Color(0xFFE65100), size: 28),
-          content: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Colors.black)),
-              const SizedBox(height: 2),
-              Text(body, style: const TextStyle(fontSize: 11, color: Colors.black87)),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
-              child: const Text('Dismiss', style: TextStyle(color: Colors.black54, fontWeight: FontWeight.bold)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFFCC00),
-                foregroundColor: Colors.black,
-                elevation: 0,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: () {
-                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
-                _navigateToHive(hiveId);
-              },
-              child: const Text('Inspect', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-          ],
-        ),
-      );
     });
 
     // 2. Tapped notification from background state
@@ -326,7 +201,7 @@ class _MainNavigationState extends State<MainNavigation> {
   void reassemble() {
     super.reassemble();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !HiveService().hasAnyActiveDevice) {
+      if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
       }
     });
@@ -336,9 +211,7 @@ class _MainNavigationState extends State<MainNavigation> {
   void dispose() {
     BackendService().stopTelemetryPolling();
     _pageController.dispose();
-    _msgSub?.cancel();
     _msgOpenedSub?.cancel();
-    _alertSub?.cancel();
     super.dispose();
   }
 

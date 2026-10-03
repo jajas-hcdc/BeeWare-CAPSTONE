@@ -593,8 +593,10 @@ def send_fcm_telemetry_notification(
             topic="environment_alerts",
             android=messaging.AndroidConfig(
                 priority="high",
+                collapse_key=f"beeware_alert_{device_id}",
                 notification=messaging.AndroidNotification(
                     channel_id="beeware_urgent_alerts",
+                    tag=f"beeware_alert_{device_id}",
                     priority="high",
                     default_sound=True,
                     default_vibrate_timings=True,
@@ -832,8 +834,10 @@ async def send_alert_notification(
                     topic="environment_alerts",
                     android=messaging.AndroidConfig(
                         priority="high",
+                        collapse_key=f"beeware_alert_{request.hive_id}",
                         notification=messaging.AndroidNotification(
                             channel_id="beeware_urgent_alerts",
+                            tag=f"beeware_alert_{request.hive_id}",
                             priority="high",
                             default_sound=True,
                             default_vibrate_timings=True,

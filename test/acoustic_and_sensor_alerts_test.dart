@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:beeware_app/models/hive_data.dart';
 import 'package:beeware_app/services/alert_service.dart';
 import 'package:beeware_app/services/hive_service.dart';
+import 'package:beeware_app/services/notification_service.dart';
 import 'package:beeware_app/widgets/sensor_visualizers.dart';
 import 'package:beeware_app/screens/hive_detail_screen.dart';
 import 'package:beeware_app/screens/hives_screen.dart';
@@ -313,6 +314,69 @@ void main() {
       // When telemetry is refreshed and empty (e.g., deleted in Firebase or device offline), unpairedNodes clears
       hiveService.updateFromBackendTelemetry([]);
       expect(hiveService.unpairedNodes.isEmpty, isTrue);
+    });
+
+    test('Only one notification is dispatched per device anomaly without duplicate 0 Hz alerts', () async {
+      final triggered = <String>[];
+      final sub = alertService.onAlertTriggered.listen((a) => triggered.add(a.id));
+
+      final liveEpoch = DateTime.now().subtract(const Duration(seconds: 20)).millisecondsSinceEpoch;
+      hiveService.addHive(
+        HiveData(
+          id: 'hive_bw_08266c',
+          name: 'Hive BW-08266C',
+          deviceId: 'BW-08266C',
+          conditionLabel: 'Queen Present',
+          confidence: 0,
+          healthScore: 30,
+          temperature: '34.2',
+          humidity: '60',
+          acoustic: '0 Hz',
+          acousticStatus: 'Not Detected (0 Hz)',
+          updated: 'Just now',
+          isAlert: true,
+          alertSeverity: 'Critical',
+          alertLabel: '⚠️ Acoustic Signal Not Detected (0 Hz)',
+          alertMessage: 'Acoustic microphone on Hive BW-08266C is detecting 0 Hz (silent or disconnected).',
+          lastAudioCreatedAt: liveEpoch,
+        ),
+      );
+
+      alertService.refreshFromCloud();
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+
+      // Should not create duplicate hive_alert_hive_bw_08266c alongside sensor_acoustic_not_detected_hive_bw_08266c
+      final bwAlerts = alertService.alerts.where((a) => a.hiveId == 'Hive BW-08266C').toList();
+      expect(bwAlerts.length, 1);
+      expect(triggered.length, 1);
+
+      // NotificationService recognizes both local 0 Hz alert and cloud SENSOR ALERT as same device + category
+      final key1 = NotificationService.extractDeviceKey(
+        payload: 'BW-08266C',
+        title: '⚠️ Acoustic Signal Not Detected (0 Hz)',
+        body: 'Acoustic microphone on Hive BW-08266C is detecting 0 Hz.',
+      );
+      final key2 = NotificationService.extractDeviceKey(
+        payload: null,
+        title: '⚠️ SENSOR ALERT: BW-08266C',
+        body: 'Sensor(s) not detected: Acoustics (0 Hz). Please inspect node wiring.',
+      );
+      expect(key1, 'BW-08266C');
+      expect(key2, 'BW-08266C');
+
+      final cat1 = NotificationService.classifyAnomalyCategory(
+        '⚠️ Acoustic Signal Not Detected (0 Hz)',
+        'Acoustic microphone on Hive BW-08266C is detecting 0 Hz.',
+      );
+      final cat2 = NotificationService.classifyAnomalyCategory(
+        '⚠️ SENSOR ALERT: BW-08266C',
+        'Sensor(s) not detected: Acoustics (0 Hz). Please inspect node wiring.',
+      );
+      expect(cat1, 'sensor_not_detected');
+      expect(cat2, 'sensor_not_detected');
+
+      await sub.cancel();
     });
   });
 }
