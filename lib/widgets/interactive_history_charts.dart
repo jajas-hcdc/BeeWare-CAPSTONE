@@ -1274,8 +1274,6 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
         }
       }
     }
-    // Relative progressive timestamp: index 0 is "Just now", then 5 mins ago, 10 mins ago, 15, 20
-    if (index == 0) return 'Just now';
-    return '${index * 5} mins ago';
+    return 'Recorded earlier';
   }
 }

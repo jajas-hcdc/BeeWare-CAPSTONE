@@ -8,7 +8,6 @@ import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/audio_recording_model.dart';
-import 'hive_service.dart';
 
 class AudioService extends ChangeNotifier {
   static final AudioService _instance = AudioService._internal();
@@ -123,6 +122,47 @@ class AudioService extends ChangeNotifier {
     }
   }
 
+  /// Parses a formatted time ("01:43:04 AM") and date ("Oct 03, 2026") into epoch ms
+  int _parseRecordedTimeAndDate(String? recTime, String? recDate) {
+    if (recTime == null || recTime.isEmpty || recTime == 'Just now' || recTime == 'null') {
+      return 0;
+    }
+    try {
+      final now = DateTime.now();
+      int year = now.year;
+      int month = now.month;
+      int day = now.day;
+
+      if (recDate != null && recDate.isNotEmpty && recDate != 'null') {
+        const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+        final cleanDate = recDate.replaceAll(',', '').trim();
+        final dateParts = cleanDate.split(RegExp(r'\s+'));
+        if (dateParts.length >= 3 && dateParts[0].length >= 3) {
+          final mIdx = months.indexOf(dateParts[0].toLowerCase().substring(0, 3));
+          if (mIdx != -1) month = mIdx + 1;
+          day = int.tryParse(dateParts[1]) ?? day;
+          year = int.tryParse(dateParts[2]) ?? year;
+        }
+      }
+
+      final cleanTime = recTime.trim();
+      final timeParts = cleanTime.split(RegExp(r'\s+'));
+      final hms = timeParts[0].split(':');
+      if (hms.length >= 2) {
+        int hour = int.tryParse(hms[0]) ?? 0;
+        final int minute = int.tryParse(hms[1]) ?? 0;
+        final int second = hms.length >= 3 ? (int.tryParse(hms[2]) ?? 0) : 0;
+        if (timeParts.length >= 2) {
+          final period = timeParts[1].toUpperCase();
+          if (period == 'PM' && hour < 12) hour += 12;
+          if (period == 'AM' && hour == 12) hour = 0;
+        }
+        return DateTime(year, month, day, hour, minute, second).millisecondsSinceEpoch;
+      }
+    } catch (_) {}
+    return 0;
+  }
+
   /// Real-time sync when a new telemetry packet reports an audio recording event
   void syncFromTelemetry({
     required String deviceId,
@@ -135,51 +175,10 @@ class AudioService extends ChangeNotifier {
     required String condition,
   }) {
     final cleanId = deviceId.trim();
-    if (cleanId.isEmpty || recordedTime.isEmpty || recordedTime == 'null') return;
+    if (cleanId.isEmpty) return;
 
-    final existing = _recordingsCache[cleanId] ?? [];
-
-    final alreadyExists = existing.any((c) =>
-        (epoch > 1700000000000 && (c.createdAt - epoch).abs() < 5000) ||
-        (c.recordedTime != null &&
-            c.recordedTime!.isNotEmpty &&
-            c.recordedTime != 'Just now' &&
-            c.recordedTime == recordedTime &&
-            c.trigger == trigger));
-
-    if (alreadyExists) return;
-
-    final now = DateTime.now();
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    final dateStr = '${months[now.month - 1]} ${now.day}, ${now.year}';
-    final realEpoch = epoch > 1700000000000 ? epoch : now.millisecondsSinceEpoch;
-
-    final newClip = AudioRecordingModel(
-      id: 'telemetry_${recordedTime.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}_${realEpoch % 10000}',
-      deviceId: cleanId,
-      slot: 0,
-      frequency: frequency,
-      condition: condition,
-      temperature: temperature,
-      humidity: humidity,
-      timestamp: recordedTime,
-      createdAt: realEpoch,
-      trigger: trigger,
-      recordedTime: recordedTime,
-      recordedDate: dateStr,
-    );
-
-    final updated = [newClip, ...existing.where((c) => c.id != newClip.id)].take(5).toList();
-    _recordingsCache[cleanId] = updated;
-
-    SharedPreferences.getInstance().then((prefs) {
-      final encoded = jsonEncode(updated.map((m) => m.toMap()).toList());
-      prefs.setString('beeware_cached_audio_$cleanId', encoded);
-    }).catchError((_) {});
-
-    notifyListeners();
-
-    // Also trigger cloud fetch to merge any newly uploaded base64 data
+    // Fetch authoritative audio recordings uploaded by the ESP32 from Firebase RTDB.
+    // Do not synthesize a clip using the phone's current clock time.
     fetchRecordingsForDevice(cleanId);
   }
 
@@ -198,11 +197,7 @@ class AudioService extends ChangeNotifier {
         final data = jsonDecode(resp.body);
 
         if (data is Map<String, dynamic>) {
-          final prefs = await SharedPreferences.getInstance();
-          final now = DateTime.now().millisecondsSinceEpoch;
-
           final entries = <Map<String, dynamic>>[];
-          int maxUptimeMillis = 0;
 
           data.forEach((slotKey, slotData) {
             if (slotData is Map) {
@@ -217,38 +212,42 @@ class AudioService extends ChangeNotifier {
                 rawCreated = int.tryParse(rawVal) ?? 0;
               }
               map['_rawCreatedAt'] = rawCreated;
-              if (rawCreated < 1700000000000 && rawCreated > maxUptimeMillis) {
-                maxUptimeMillis = rawCreated;
-              }
               entries.add(map);
             }
           });
 
+          bool hasValidClockEntries = false;
           for (final entry in entries) {
-            final slotKey = entry['_slotKey'] as String;
             final rawCreated = entry['_rawCreatedAt'] as int;
-
-            int realEpoch;
+            final recTime = (entry['recorded_time'] ?? entry['recordedTime'] ?? entry['timestamp'])?.toString();
+            final recDate = (entry['recorded_date'] ?? entry['recordedDate'])?.toString();
+            int realEpoch = 0;
             if (rawCreated > 1700000000000) {
               realEpoch = rawCreated;
             } else if (rawCreated > 1700000000) {
               realEpoch = rawCreated * 1000;
             } else {
-              // Persist arrival timestamp in app so it stays anchored to the clock
-              final cacheKey = 'beeware_clip_arrival_${cleanId}_${slotKey}_$rawCreated';
-              final savedEpoch = prefs.getInt(cacheKey);
+              realEpoch = _parseRecordedTimeAndDate(recTime, recDate);
+            }
+            entry['_resolvedEpoch'] = realEpoch;
+            if (realEpoch > 1700000000000) {
+              hasValidClockEntries = true;
+            }
+          }
 
-              if (savedEpoch != null && savedEpoch > 1700000000000) {
-                realEpoch = savedEpoch;
-              } else {
-                final deltaMs = maxUptimeMillis > rawCreated ? (maxUptimeMillis - rawCreated) : 0;
-                realEpoch = now - deltaMs;
-                await prefs.setInt(cacheKey, realEpoch);
-              }
+          for (final entry in entries) {
+            final slotKey = entry['_slotKey'] as String;
+            final rawCreated = entry['_rawCreatedAt'] as int;
+            final resolvedEpoch = entry['_resolvedEpoch'] as int;
+
+            // Skip legacy pre-NTP slots that lack a real timestamp when valid NTP slots exist
+            if (hasValidClockEntries && resolvedEpoch == 0) {
+              continue;
             }
 
-            entry['createdAt'] = realEpoch;
-            entry['created_at'] = realEpoch;
+            final effectiveEpoch = resolvedEpoch > 0 ? resolvedEpoch : rawCreated;
+            entry['createdAt'] = effectiveEpoch;
+            entry['created_at'] = effectiveEpoch;
 
             final model = AudioRecordingModel.fromMap(slotKey, entry);
             list.add(model);
@@ -259,71 +258,13 @@ class AudioService extends ChangeNotifier {
       debugPrint('Fetch audio recordings from Firebase RTDB error: $e');
     }
 
-    // Check if Hive telemetry has an even newer recording not yet committed to audio_history
-    try {
-      final hive = HiveService().getHiveByDeviceId(cleanId);
-      if (hive != null &&
-          hive.lastAudioRecordedTime != null &&
-          hive.lastAudioRecordedTime!.isNotEmpty &&
-          hive.lastAudioRecordedTime != 'null') {
-        final recTime = hive.lastAudioRecordedTime!;
-        final trig = hive.lastAudioTrigger ?? 'Device Restart';
-        final audioCreatedAt = hive.lastAudioCreatedAt ?? 0;
-        final alreadyPresent = list.any((c) =>
-            (c.recordedTime != null &&
-                c.recordedTime!.isNotEmpty &&
-                c.recordedTime != 'Just now' &&
-                c.recordedTime == recTime &&
-                c.trigger == trig) ||
-            (audioCreatedAt > 1700000000000 &&
-                (c.createdAt - audioCreatedAt).abs() < 5000));
-
-        if (!alreadyPresent) {
-          final now = DateTime.now();
-          const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-          final dateStr = '${months[now.month - 1]} ${now.day}, ${now.year}';
-          final epoch = audioCreatedAt > 1700000000000
-              ? audioCreatedAt
-              : now.millisecondsSinceEpoch;
-          final freqNum = int.tryParse(hive.acoustic.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-          final tVal = double.tryParse(hive.temperature.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 34.0;
-          final hVal = double.tryParse(hive.humidity.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 60.0;
-
-          list.insert(
-            0,
-            AudioRecordingModel(
-              id: 'telemetry_rec_${recTime.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}',
-              deviceId: cleanId,
-              slot: 0,
-              frequency: freqNum,
-              condition: hive.conditionLabel,
-              temperature: tVal,
-              humidity: hVal,
-              timestamp: recTime,
-              createdAt: epoch,
-              trigger: trig,
-              recordedTime: recTime,
-              recordedDate: dateStr,
-            ),
-          );
+    // Only fall back to cached recordings if the network fetch returned empty
+    if (list.isEmpty) {
+      final existingCached = _recordingsCache[cleanId] ?? [];
+      for (final cached in existingCached) {
+        if (!cached.id.startsWith('telemetry_')) {
+          list.add(cached);
         }
-      }
-    } catch (e) {
-      debugPrint('Sync telemetry audio to list error: $e');
-    }
-
-    // Preserve any existing recordings from in-memory cache
-    final existingCached = _recordingsCache[cleanId] ?? [];
-    for (final cached in existingCached) {
-      final isAlreadyInList = list.any((item) =>
-          item.id == cached.id ||
-          (item.recordedTime != null &&
-              item.recordedTime!.isNotEmpty &&
-              item.recordedTime != 'Just now' &&
-              item.recordedTime == cached.recordedTime &&
-              item.trigger == cached.trigger));
-      if (!isAlreadyInList) {
-        list.add(cached);
       }
     }
 

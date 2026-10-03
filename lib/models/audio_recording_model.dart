@@ -61,7 +61,7 @@ class AudioRecordingModel {
     final slot = parseNumToInt(data['slot'], 0);
     final createdAt = parseNumToInt(
       data['created_at'] ?? data['createdAt'],
-      DateTime.now().millisecondsSinceEpoch,
+      0,
     );
 
     final trigger = (data['trigger'] ??
