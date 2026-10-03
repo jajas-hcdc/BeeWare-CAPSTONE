@@ -87,27 +87,29 @@ class HiveService extends ChangeNotifier {
     final existingMap = {
       for (var h in _hives) h.id: h,
       for (var h in _hives) h.deviceId: h,
+      for (var h in _hives) h.deviceId.trim().toUpperCase(): h,
     };
     final parsed = docs.map((doc) {
       final cloudHive = HiveData.fromFirestore(doc.id, doc.data());
-      final existing = existingMap[cloudHive.id] ?? existingMap[cloudHive.deviceId];
-      final bool cloudIsStaleOrEmpty = cloudHive.acoustic == '0 Hz' ||
-          cloudHive.acoustic.startsWith('0') ||
-          cloudHive.temperature == '--' ||
-          cloudHive.temperature == '0.0' ||
-          cloudHive.conditionLabel == 'Connecting';
-      final bool existingHasActiveData = existing != null &&
-          existing.acoustic != '0 Hz' &&
-          !existing.acoustic.startsWith('0') &&
-          existing.temperature != '--';
+      final existing = existingMap[cloudHive.id] ??
+          existingMap[cloudHive.deviceId] ??
+          existingMap[cloudHive.deviceId.trim().toUpperCase()];
+      final int existingEpoch = existing?.lastAudioCreatedAt ?? 0;
+      final int cloudEpoch = cloudHive.lastAudioCreatedAt ?? 0;
+      final bool existingHasTelemetry = existing != null &&
+          (existingEpoch >= cloudEpoch &&
+              (existing.temperature != '--' || existingEpoch > 0));
 
-      if (existingHasActiveData && cloudIsStaleOrEmpty) {
+      if (existingHasTelemetry) {
         return cloudHive.copyWith(
           acoustic: existing.acoustic,
           acousticStatus: existing.acousticStatus,
           temperature: existing.temperature,
           humidity: existing.humidity,
           batteryLevel: existing.batteryLevel,
+          wifiStatus: existing.wifiStatus,
+          signalBars: existing.signalBars,
+          updated: existing.updated,
           conditionLabel: existing.conditionLabel,
           healthScore: existing.healthScore,
           confidence: existing.confidence,
@@ -120,10 +122,21 @@ class HiveService extends ChangeNotifier {
           queenAbsentDetected: existing.queenAbsentDetected,
           queenAcceptedDetected: existing.queenAcceptedDetected,
           queenRejectedDetected: existing.queenRejectedDetected,
-          temperatureHistory: existing.temperatureHistory,
-          humidityHistory: existing.humidityHistory,
-          acousticHistory: existing.acousticHistory,
-          historyDates: existing.historyDates,
+          temperatureHistory: existing.temperatureHistory.isNotEmpty
+              ? existing.temperatureHistory
+              : cloudHive.temperatureHistory,
+          humidityHistory: existing.humidityHistory.isNotEmpty
+              ? existing.humidityHistory
+              : cloudHive.humidityHistory,
+          acousticHistory: existing.acousticHistory.isNotEmpty
+              ? existing.acousticHistory
+              : cloudHive.acousticHistory,
+          historyDates: existing.historyDates.isNotEmpty
+              ? existing.historyDates
+              : cloudHive.historyDates,
+          lastAudioRecordedTime: existing.lastAudioRecordedTime ?? cloudHive.lastAudioRecordedTime,
+          lastAudioTrigger: existing.lastAudioTrigger ?? cloudHive.lastAudioTrigger,
+          lastAudioCreatedAt: existing.lastAudioCreatedAt ?? cloudHive.lastAudioCreatedAt,
           qrCodeUrl: cloudHive.qrCodeUrl ?? existing.qrCodeUrl,
         );
       }
@@ -143,20 +156,33 @@ class HiveService extends ChangeNotifier {
         final preferH = (current.name.isEmpty || current.name.toUpperCase() == current.deviceId.toUpperCase()) &&
             h.name.isNotEmpty &&
             h.name.toUpperCase() != h.deviceId.toUpperCase();
+        final int hEpoch = h.lastAudioCreatedAt ?? 0;
+        final int curEpoch = current.lastAudioCreatedAt ?? 0;
+        final HiveData newerTelemetry = hEpoch >= curEpoch ? h : current;
         if (preferH) {
           deduplicated[key] = h.copyWith(
-            temperature: h.temperature != '--' ? h.temperature : current.temperature,
-            humidity: h.humidity != '--' ? h.humidity : current.humidity,
-            acoustic: h.acoustic != '0 Hz' ? h.acoustic : current.acoustic,
-            acousticStatus: h.acousticStatus != 'Not Detected (0 Hz)' ? h.acousticStatus : current.acousticStatus,
+            temperature: newerTelemetry.temperature != '--' ? newerTelemetry.temperature : current.temperature,
+            humidity: newerTelemetry.humidity != '--' ? newerTelemetry.humidity : current.humidity,
+            acoustic: newerTelemetry.acoustic,
+            acousticStatus: newerTelemetry.acousticStatus,
+            isAlert: newerTelemetry.isAlert,
+            alertSeverity: newerTelemetry.alertSeverity,
+            alertLabel: newerTelemetry.alertLabel,
+            alertMessage: newerTelemetry.alertMessage,
+            lastAudioCreatedAt: newerTelemetry.lastAudioCreatedAt ?? current.lastAudioCreatedAt,
             qrCodeUrl: h.qrCodeUrl ?? current.qrCodeUrl,
           );
         } else {
           deduplicated[key] = current.copyWith(
-            temperature: current.temperature != '--' ? current.temperature : h.temperature,
-            humidity: current.humidity != '--' ? current.humidity : h.humidity,
-            acoustic: current.acoustic != '0 Hz' ? current.acoustic : h.acoustic,
-            acousticStatus: current.acousticStatus != 'Not Detected (0 Hz)' ? current.acousticStatus : h.acousticStatus,
+            temperature: newerTelemetry.temperature != '--' ? newerTelemetry.temperature : h.temperature,
+            humidity: newerTelemetry.humidity != '--' ? newerTelemetry.humidity : h.humidity,
+            acoustic: newerTelemetry.acoustic,
+            acousticStatus: newerTelemetry.acousticStatus,
+            isAlert: newerTelemetry.isAlert,
+            alertSeverity: newerTelemetry.alertSeverity,
+            alertLabel: newerTelemetry.alertLabel,
+            alertMessage: newerTelemetry.alertMessage,
+            lastAudioCreatedAt: newerTelemetry.lastAudioCreatedAt ?? h.lastAudioCreatedAt,
             audioFilePath: current.audioFilePath ?? h.audioFilePath,
             qrCodeUrl: current.qrCodeUrl ?? h.qrCodeUrl,
           );
@@ -905,10 +931,10 @@ class HiveService extends ChangeNotifier {
       ConnectivityService().recordSyncEvent();
       _debouncedNotify();
 
-      // Mirror active telemetry to Cloud Firestore so cloud collection doesn't stay on stale 0 Hz
+      // Mirror active telemetry to Cloud Firestore when node is online so cloud collection stays in sync
       try {
         for (final h in _hives) {
-          if (h.acoustic != '0 Hz' && !h.acoustic.startsWith('0')) {
+          if (isDeviceActivelyOnline(h.deviceId)) {
             FirebaseFirestore.instance.collection('hives').doc(h.id).set({
               ...h.toMap(),
               'updatedAt': FieldValue.serverTimestamp(),

@@ -131,6 +131,7 @@ class AlertService extends ChangeNotifier {
       final encoded = jsonEncode(jsonList);
       await prefs.setString('beeware_cached_alerts', encoded);
       await prefs.setStringList('beeware_dismissed_alerts', _dismissedAlertIds.toList());
+      await prefs.setStringList('beeware_dispatched_notifications', _dispatchedNotificationIds.toList());
     } catch (e) {
       debugPrint('Error saving alerts cache: $e');
     }
@@ -144,6 +145,10 @@ class AlertService extends ChangeNotifier {
       final dismissed = prefs.getStringList('beeware_dismissed_alerts');
       if (dismissed != null) {
         _dismissedAlertIds.addAll(dismissed);
+      }
+      final dispatched = prefs.getStringList('beeware_dispatched_notifications');
+      if (dispatched != null) {
+        _dispatchedNotificationIds.addAll(dispatched);
       }
       final raw = prefs.getString('beeware_cached_alerts');
       if (raw != null && raw.isNotEmpty) {
@@ -259,7 +264,6 @@ class AlertService extends ChangeNotifier {
     }
 
     // 2. Derive alerts from live HiveData in HiveService
-    final Set<String> activeDispatchKeys = {};
     for (final h in hives) {
       final String deviceKey = (h.deviceId.trim().isNotEmpty ? h.deviceId.trim() : h.id.trim()).toUpperCase();
       final bool isOnline = HiveService().isDeviceActivelyOnline(deviceKey);
@@ -390,17 +394,22 @@ class AlertService extends ChangeNotifier {
           primaryNotificationAlert.message,
         );
         final dispatchKey = '${deviceKey}_$category';
-        activeDispatchKeys.add(dispatchKey);
         if (isOnline) {
           _dispatchNotificationIfNew(deviceKey, dispatchKey, primaryNotificationAlert);
         }
-      } else {
+      } else if (isOnline &&
+          h.temperature != '--' &&
+          h.humidity != '--' &&
+          !isTempNotDetected &&
+          !isHumNotDetected &&
+          !isAcousticNotDetected &&
+          !h.isAlert) {
+        // Only clear dispatched notification state when the device is actively online
+        // AND confirmed to have normal, healthy sensor readings (never during refresh/loading)
+        _dispatchedNotificationIds.removeWhere((key) => key.startsWith('${deviceKey}_'));
         NotificationService().clearDeviceNotificationState(deviceKey);
       }
     }
-
-    // Clear resolved alerts from dispatched set so future anomalies trigger again
-    _dispatchedNotificationIds.removeWhere((key) => !activeDispatchKeys.contains(key));
 
     // Sort by timestamp newest first
     result.sort((a, b) => b.timestamp.compareTo(a.timestamp));

@@ -103,12 +103,10 @@ class NotificationService {
 
   OverlayEntry? _activeBannerEntry;
 
-  /// Tracks the last anomaly notification shown per device key so duplicate
-  /// triggers (e.g. local telemetry check + cloud FCM push for the same anomaly)
-  /// only produce a single notification.
+  /// Tracks the active anomaly notification category shown per device key so
+  /// duplicate triggers (e.g. pull-to-refresh, periodic polling, or cloud FCM push
+  /// for the same active anomaly) only produce a single notification until resolved.
   final Map<String, ({String category, DateTime timestamp})> _lastNotifiedByDevice = {};
-
-  static const Duration _dedupCooldown = Duration(minutes: 15);
 
   /// Extracts a normalized device/hive key (e.g. "BW-08266C") from payload, title, or body.
   static String extractDeviceKey({String? payload, required String title, required String body}) {
@@ -157,7 +155,7 @@ class NotificationService {
     return title.trim().toLowerCase();
   }
 
-  /// Clears the deduplication cooldown for a device once its anomaly is resolved,
+  /// Clears the deduplication state for a device once its anomaly is resolved,
   /// allowing future anomalies to notify immediately.
   void clearDeviceNotificationState(String deviceOrHiveId) {
     final key = extractDeviceKey(payload: deviceOrHiveId, title: '', body: '');
@@ -165,7 +163,7 @@ class NotificationService {
   }
 
   /// Displays a native system pop-up notification (Heads-Up Banner on phone).
-  /// Deduplicates by device and anomaly category so only ONE notification is sent per anomaly.
+  /// Deduplicates by device and anomaly category so only ONE notification is sent per active anomaly.
   Future<void> showNotification({
     int? id,
     required String title,
@@ -179,9 +177,7 @@ class NotificationService {
 
     if (category != 'test_alert') {
       final previous = _lastNotifiedByDevice[deviceKey];
-      if (previous != null &&
-          previous.category == category &&
-          now.difference(previous.timestamp) < _dedupCooldown) {
+      if (previous != null && previous.category == category) {
         debugPrint(
           '🔕 [BeeWare] Suppressed duplicate notification for $deviceKey ($category): "$title"',
         );

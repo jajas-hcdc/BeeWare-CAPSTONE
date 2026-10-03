@@ -376,6 +376,27 @@ void main() {
       expect(cat1, 'sensor_not_detected');
       expect(cat2, 'sensor_not_detected');
 
+      // Simulate repeated Home screen pull-to-refresh cycles while the anomaly remains active
+      for (int i = 0; i < 3; i++) {
+        await hiveService.refreshFromCloud();
+        hiveService.updateFromBackendTelemetry([
+          {
+            'device_id': 'BW-08266C',
+            'temperature': 34.2,
+            'humidity': 60.0,
+            'frequency': 0,
+            'frequency_hz': 0,
+            'last_audio_epoch': DateTime.now().millisecondsSinceEpoch,
+            'timestamp': 'Just now',
+          }
+        ]);
+        await alertService.refreshFromCloud();
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Must still have dispatched only 1 notification total across all refreshes
+      expect(triggered.length, 1);
+
       await sub.cancel();
     });
   });
