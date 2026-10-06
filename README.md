@@ -27,32 +27,6 @@ BeeWare is a Flutter mobile application and FastAPI backend for non-invasive, AI
 
 ---
 
-## 📁 Architecture & Project Structure
-
-```
-BeeWare-main/
-├── lib/
-│   ├── models/             # HiveData, AlertModel
-│   ├── screens/            # Home, Hives, HiveDetail (4 sub-tabs), Alerts, Settings, Auth
-│   ├── services/           # AuthService, HiveService, FirebaseService, BackendService, AudioService, ModelService
-│   ├── theme/              # AppColors, AppStyles
-│   ├── widgets/            # CustomAppBar, CircularGauge, SparklineChart, BeehiveIcon, CalendarPickerDialog
-│   └── main.dart           # App entrypoint, AuthGate, Bottom navigation
-├── backend/
-│   ├── main.py             # Secure FastAPI alert notification service
-│   ├── requirements.txt    # Python dependencies (FastAPI, uvicorn, firebase-admin, pydantic)
-│   ├── test_api.py         # Automated pytest test suite
-│   └── .env.example        # Environment variable template
-├── firestore.rules         # Cloud Firestore security rules
-├── assets/
-│   ├── images/             # Honeycomb background, bee mascot, icons, progress bar
-│   ├── beeware_model.tflite # Edge AI acoustic classification model
-│   └── labels.txt          # Queen status model labels
-└── test/                   # Flutter unit & widget tests (HiveService, AlertModel, UI smoke tests)
-```
-
----
-
 ## 🚀 Getting Started
 
 ### 1. Flutter Mobile App
