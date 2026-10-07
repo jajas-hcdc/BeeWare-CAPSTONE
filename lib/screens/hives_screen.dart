@@ -396,19 +396,16 @@ class _HivesScreenState extends State<HivesScreen> {
   }
 
   Widget _buildHiveCard(BuildContext context, HiveData hive) {
-    final acousticClean = hive.acoustic.trim().toLowerCase();
-    final isAcousticNotDetected = acousticClean == '0' ||
-        acousticClean == '0 hz' ||
-        acousticClean.startsWith('0 ') ||
-        hive.acousticStatus.toLowerCase().contains('not detected');
-
-    final conditionText = isAcousticNotDetected ? 'No Buzz Detected' : hive.conditionLabel;
-    final conditionBgColor = isAcousticNotDetected ? const Color(0xFFFFEBEE) : hive.labelBgColor;
-    final conditionTextColor = isAcousticNotDetected
+    final isNoBuzz = hive.isNoBuzzDetected;
+    final conditionText = hive.isLowFreqNoBuzz
+        ? 'No Buzz Detected (${hive.acoustic})'
+        : (isNoBuzz ? 'No Buzz Detected' : hive.conditionLabel);
+    final conditionBgColor = isNoBuzz ? const Color(0xFFFFEBEE) : hive.labelBgColor;
+    final conditionTextColor = isNoBuzz
         ? const Color(0xFFC62828)
         : (hive.labelColor == Colors.grey ? Colors.black87 : hive.labelColor);
-    final confidenceText = isAcousticNotDetected ? '0%' : '${hive.confidence}%';
-    final confidenceColor = isAcousticNotDetected ? const Color(0xFFD32F2F) : Colors.black;
+    final confidenceText = hive.isAcousticNotDetected ? '0%' : '${hive.confidence}%';
+    final confidenceColor = isNoBuzz ? const Color(0xFFD32F2F) : Colors.black;
 
     return GestureDetector(
       onTap: () {

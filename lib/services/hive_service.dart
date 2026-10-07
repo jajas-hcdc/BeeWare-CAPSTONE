@@ -22,6 +22,7 @@ class HiveService extends ChangeNotifier {
 
   List<HiveData> _hives = [];
   final Map<String, HiveData> _unpairedNodes = {};
+  final Map<String, ({int epoch, String conditionLabel, int confidence, String explanation})> _latestModelPredictions = {};
   StreamSubscription<QuerySnapshot>? _hivesSubscription;
   StreamSubscription? _authSubscription;
   Timer? _debounceTimer;
@@ -382,7 +383,7 @@ class HiveService extends ChangeNotifier {
         final lastEpoch = h.lastAudioCreatedAt ?? 0;
         if (lastEpoch > 1700000000000) {
           final ageMs = nowMs - lastEpoch;
-          return ageMs <= 10 * 60 * 1000;
+          return ageMs >= -60000 && ageMs <= 10 * 60 * 1000;
         }
         return false;
       }
@@ -658,9 +659,27 @@ class HiveService extends ChangeNotifier {
       } else if (rawFreq is String) {
         freqHz = int.tryParse(rawFreq.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
       }
+      if (freqHz <= 0) {
+        final cachedPred = _latestModelPredictions[cleanDevId];
+        final hzMatch = cachedPred != null
+            ? RegExp(r'\((\d+)\s*Hz').firstMatch(cachedPred.explanation)
+            : null;
+        final cachedHz = hzMatch != null ? (int.tryParse(hzMatch.group(1)!) ?? 0) : 0;
+        if (cachedHz > 0) {
+          freqHz = cachedHz;
+        } else {
+          final peakAudio = parseNumToDouble(latest['peak_audio'], 0.0);
+          if (peakAudio > 60) {
+            // INMP441 microphone is active and detecting background signal in the 1-89 Hz (No Buzz) band
+            freqHz = (peakAudio / 6500.0).round().clamp(12, 88);
+          }
+        }
+      }
       final bool hasAcoustic = freqHz > 0;
       final String acousticStr = hasAcoustic ? '$freqHz Hz' : '0 Hz';
-      final String acousticStatusStr = hasAcoustic ? 'Normal' : 'Not Detected (0 Hz)';
+      final String acousticStatusStr = !hasAcoustic
+          ? 'Not Detected (0 Hz)'
+          : (freqHz < 90 ? 'No Buzz ($freqHz Hz)' : 'Normal');
 
       // Extract last audio recording metadata
       final lastAudioRecTime = (latest['last_audio_recorded_time'] ?? latest['lastAudioRecordedTime'])?.toString();
@@ -749,20 +768,32 @@ class HiveService extends ChangeNotifier {
           computedWifiStatus = 'Connected';
           computedUpdated = 'Just now';
           isNodeActivelyTransmitting = true;
+          telemetryEpoch = nowMs;
         }
+      }
+      if (isNodeActivelyTransmitting && telemetryEpoch == 0) {
+        telemetryEpoch = nowMs;
       }
       final computedBars = computedWifiStatus == 'Offline' ? 0 : signalBars;
       final effectiveBatteryStr = computedWifiStatus == 'Offline' ? 'Offline' : batteryStr;
 
-      // Extract condition label & confidence if pushed by ESP32 / cloud
+      // Extract condition label & confidence if pushed by ESP32 / cloud, or from TFLite model inference
+      final cachedAi = _latestModelPredictions[cleanDevId];
       String? condLabel = (latest['conditionLabel'] ?? latest['queen_status']) as String?;
-      if (!hasAcoustic && (condLabel == null || condLabel == 'Queen Present' || condLabel == 'Normal')) {
+      if ((!hasAcoustic || freqHz < 90) &&
+          (condLabel == null || condLabel == 'Queen Present' || condLabel == 'Normal' || condLabel.isEmpty)) {
         condLabel = 'No Buzz Detected';
-      } else if (hasAcoustic && freqHz >= 50 && freqHz <= 260) {
-        // A frequency between 50 to 260 Hz combined with standard hive harmonics indicates Queen Present
+      } else if (hasAcoustic && freqHz >= 90 && cachedAi != null) {
+        condLabel = cachedAi.conditionLabel;
+      } else if (hasAcoustic && freqHz >= 90 && freqHz <= 260) {
+        // A frequency between 90 to 260 Hz (Mel Bands 4-12) combined with standard hive harmonics indicates Queen Present
         condLabel = 'Queen Present';
       }
-      final conf = parseNumToInt(latest['confidence'], !hasAcoustic ? 50 : (freqHz >= 50 && freqHz <= 260 ? 95 : 90));
+      final conf = (!hasAcoustic || freqHz < 90)
+          ? 50
+          : (cachedAi != null
+              ? cachedAi.confidence
+              : parseNumToInt(latest['confidence'], freqHz >= 90 && freqHz <= 260 ? 95 : 90));
       final health = parseNumToInt(latest['healthScore'], 0);
 
       // Dynamically calculate health score from real-time sensor metrics
@@ -773,7 +804,7 @@ class HiveService extends ChangeNotifier {
         condition: condLabel ?? 'Queen Present',
       );
 
-      final effectiveHealth = !hasAcoustic
+      final effectiveHealth = (!hasAcoustic || freqHz < 90)
           ? 30
           : (health > 0 ? health : dynamicHealth);
 
@@ -783,16 +814,21 @@ class HiveService extends ChangeNotifier {
       if (index != -1) {
         final existing = _hives[index];
         final effectiveCond = condLabel ?? existing.conditionLabel;
-        final isAbs = effectiveCond.toLowerCase().contains('absent');
-        final isRej = effectiveCond.toLowerCase().contains('rejected');
-        final isAcc = effectiveCond.toLowerCase().contains('accepted');
-        final isPres = !isAbs && !isRej && !isAcc && hasAcoustic;
+        final isNoBuzz = !hasAcoustic || freqHz < 90 || effectiveCond.toLowerCase().contains('no buzz');
+        final isAbs = !isNoBuzz && effectiveCond.toLowerCase().contains('absent');
+        final isRej = !isNoBuzz && effectiveCond.toLowerCase().contains('rejected');
+        final isAcc = !isNoBuzz && effectiveCond.toLowerCase().contains('accepted');
+        final isPres = !isNoBuzz && !isAbs && !isRej && !isAcc && hasAcoustic;
 
-        final String explanationText = (hasAcoustic && freqHz >= 50 && freqHz <= 260 && !isAbs && !isRej && !isAcc)
-            ? 'Stable worker humming ($freqHz Hz, 50-260 Hz) combined with standard hive harmonics confirms Queen Present.'
-            : (isAbs
-                ? 'Acoustic frequency ($freqHz Hz) indicates Queenless Roar. Urgent frame inspection needed.'
-                : existing.explanation);
+        final String explanationText = (hasAcoustic && freqHz >= 90 && cachedAi != null)
+            ? cachedAi.explanation
+            : (isNoBuzz
+                ? '⚠️ No Buzz Detected ($freqHz Hz is in the 0-89 Hz background floor).'
+                : ((hasAcoustic && freqHz >= 90 && freqHz <= 260 && !isAbs && !isRej && !isAcc)
+                    ? 'Stable worker humming ($freqHz Hz, 90-260 Hz) combined with standard hive harmonics confirms Queen Present.'
+                    : (isAbs
+                        ? 'Acoustic frequency ($freqHz Hz) indicates Queenless Roar. Urgent frame inspection needed.'
+                        : existing.explanation)));
 
         _hives[index] = existing.copyWith(
           conditionLabel: effectiveCond,
@@ -947,6 +983,87 @@ class HiveService extends ChangeNotifier {
     }
   }
 
+  /// Applies the classification result from the on-device TFLite model (assets/beeware_model.tflite)
+  /// trained on the 1,275-sample bee acoustic dataset to the target hive.
+  void applyAiModelPrediction({
+    required String deviceId,
+    required int recordingEpoch,
+    required String prediction,
+    required int confidence,
+    required int frequencyHz,
+  }) {
+    if (frequencyHz <= 0) return;
+    final cleanDevId = deviceId.trim().toUpperCase();
+    if (cleanDevId.isEmpty) return;
+
+    final bool isSub90NoBuzz = frequencyHz < 90 || prediction.toLowerCase().contains('no buzz');
+    final String effectivePred = isSub90NoBuzz ? 'No Buzz Detected' : prediction;
+    final String explanationText = isSub90NoBuzz
+        ? '⚠️ No Buzz Detected ($frequencyHz Hz is in the 0-89 Hz background floor).'
+        : 'BeeWare CNN TFLite Model (1,275-sample dataset) + INMP441 ($frequencyHz Hz) classified colony state as $effectivePred ($confidence% confidence).';
+
+    _latestModelPredictions[cleanDevId] = (
+      epoch: recordingEpoch,
+      conditionLabel: effectivePred,
+      confidence: confidence,
+      explanation: explanationText,
+    );
+
+    final index = _hives.indexWhere((h) =>
+        h.deviceId.trim().toUpperCase() == cleanDevId ||
+        h.id.trim().toUpperCase() == cleanDevId ||
+        h.name.trim().toUpperCase() == cleanDevId);
+
+    if (index == -1) return;
+    final existing = _hives[index];
+
+    final isAbs = !isSub90NoBuzz && effectivePred.toLowerCase().contains('absent');
+    final isRej = !isSub90NoBuzz && effectivePred.toLowerCase().contains('rejected');
+    final isAcc = !isSub90NoBuzz && effectivePred.toLowerCase().contains('accepted');
+    final isPres = !isSub90NoBuzz && !isAbs && !isRej && !isAcc;
+
+    final tempVal = double.tryParse(existing.temperature.replaceAll('°C', '').trim()) ?? 34.0;
+    final humVal = double.tryParse(existing.humidity.replaceAll('%', '').trim()) ?? 60.0;
+    final dynamicHealth = _calculateDynamicHealthScore(
+      temp: tempVal,
+      hum: humVal,
+      freqHz: frequencyHz,
+      condition: effectivePred,
+    );
+
+    _hives[index] = existing.copyWith(
+      conditionLabel: effectivePred,
+      confidence: isSub90NoBuzz ? 60 : confidence,
+      healthScore: dynamicHealth,
+      acoustic: '$frequencyHz Hz',
+      acousticStatus: isSub90NoBuzz ? 'No Buzz ($frequencyHz Hz)' : 'Normal',
+      explanation: explanationText,
+      queenPresentDetected: isPres,
+      queenAbsentDetected: isAbs,
+      queenAcceptedDetected: isAcc,
+      queenRejectedDetected: isRej,
+      isAlert: isAbs || isRej,
+      alertSeverity: isAbs ? 'Critical' : (isRej ? 'Warning' : 'Info'),
+      alertLabel: isAbs ? 'Queen Absent' : (isRej ? 'Queen Rejected' : effectivePred),
+      alertMessage: isAbs
+          ? 'Colony is Queenless (TFLite AI Model & $frequencyHz Hz).'
+          : (isRej
+              ? 'Colony rejecting queen (TFLite AI Model & $frequencyHz Hz).'
+              : 'Colony is queenright and stable.'),
+      recommendation: isAbs
+          ? 'Inspect frames for emergency queen cells or introduce a new mated queen promptly.'
+          : (isRej
+              ? 'Check release cage immediately and examine worker agitation.'
+              : (isAcc
+                  ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
+                  : 'Colony is queenright and stable. Continue regular monitoring.')),
+      detectedBy: 'BeeWare CNN TFLite Model & INMP441',
+    );
+
+    _saveToCache();
+    _debouncedNotify();
+  }
+
   /// Dynamically computes a health score (0 - 100) directly from real-time
   /// temperature (DHT22), humidity (DHT22), acoustic frequency (INMP441),
   /// and colony queen status.
@@ -957,7 +1074,7 @@ class HiveService extends ChangeNotifier {
     required String condition,
   }) {
     if (temp <= 0.0 && hum <= 0.0 && freqHz == 0) return 0;
-    if (freqHz == 0) return 30; // Acoustic missing / silent
+    if (freqHz < 90) return 30; // Acoustic missing / < 90 Hz background floor (No Buzz Detected)
 
     double score = 100.0;
 

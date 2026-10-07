@@ -28,7 +28,7 @@ class AudioProcessor {
   static const double _logStep   = 0.06875177742080365;
 
   // ───────────────────────────────────────────────────────────────────────
-  /// Public entry point.
+  /// Public entry point for a file path.
   /// Returns a [128][128][1] tensor ready to feed into the TFLite model.
   /// Executes in a background isolate so the UI stays responsive.
   static Future<List<List<List<double>>>> extractMelSpectrogram(
@@ -36,10 +36,109 @@ class AudioProcessor {
     return compute(_isolateEntry, audioPath);
   }
 
+  /// Public entry point for in-memory WAV bytes (e.g. decoded from ESP32 Base64 audio).
+  /// Returns a [128][128][1] tensor ready to feed into the TFLite model.
+  static Future<List<List<List<double>>>> extractMelSpectrogramFromBytes(
+      Uint8List wavBytes) async {
+    return compute(_computeMelSpectrogram, wavBytes);
+  }
+
+  /// Computes the dominant acoustic frequency (Hz) from in-memory WAV bytes
+  /// after removing any INMP441 MEMS microphone DC offset.
+  static Future<int> computeDominantFrequencyHz(Uint8List wavBytes) async {
+    return compute(_computeDominantHz, wavBytes);
+  }
+
   // ── Isolate entry (must be a static / top-level function) ──────────────
   static List<List<List<double>>> _isolateEntry(String audioPath) {
     final bytes = File(audioPath).readAsBytesSync();
     return _computeMelSpectrogram(bytes);
+  }
+
+  static int _computeDominantHz(Uint8List bytes) {
+    if (bytes.length <= 44) return 0;
+    final bd = ByteData.sublistView(bytes);
+    int sampleRate = 16000;
+    int numChannels = 1;
+    int bitsPerSample = 16;
+    int dataStart = -1;
+    int dataSize = 0;
+
+    int offset = 12;
+    while (offset + 8 <= bytes.length) {
+      final id = String.fromCharCodes(bytes.sublist(offset, offset + 4));
+      final chunkSz = bd.getUint32(offset + 4, Endian.little);
+      if (id == 'fmt ') {
+        numChannels = bd.getUint16(offset + 10, Endian.little);
+        sampleRate = bd.getUint32(offset + 12, Endian.little);
+        bitsPerSample = bd.getUint16(offset + 22, Endian.little);
+      } else if (id == 'data') {
+        dataStart = offset + 8;
+        dataSize = chunkSz;
+        break;
+      }
+      offset += 8 + chunkSz + (chunkSz % 2);
+    }
+
+    if (dataStart < 0 || bitsPerSample != 16 || sampleRate <= 0) return 0;
+    final int bytesPerFrame = (bitsPerSample ~/ 8) * max<int>(1, numChannels);
+    final int totalFrames = min<int>(dataSize ~/ bytesPerFrame, (bytes.length - dataStart) ~/ bytesPerFrame);
+    if (totalFrames < 256) return 0;
+
+    // 1. Decode PCM and subtract DC bias (INMP441 often has a constant DC offset)
+    final samples = Float64List(totalFrames);
+    double sum = 0.0;
+    for (int i = 0; i < totalFrames; i++) {
+      final s = bd.getInt16(dataStart + i * bytesPerFrame, Endian.little) / 32768.0;
+      samples[i] = s;
+      sum += s;
+    }
+    final mean = sum / totalFrames;
+    double maxAc = 0.0;
+    for (int i = 0; i < totalFrames; i++) {
+      final ac = samples[i] - mean;
+      samples[i] = ac;
+      final absAc = ac.abs();
+      if (absAc > maxAc) maxAc = absAc;
+    }
+
+    // If AC signal is completely flat (microphone disconnected), return 0 Hz
+    if (maxAc < 0.0015) return 0;
+
+    // 2. Accumulate FFT power spectrum across frames to find dominant fundamental frequency
+    final window = _hannWindow(_nFft);
+    final nBins = _nFft ~/ 2 + 1;
+    final avgPower = Float64List(nBins);
+    int frameCount = 0;
+
+    for (int start = 0; start + _nFft <= totalFrames; start += _hopLength) {
+      final real = Float64List(_nFft);
+      final imag = Float64List(_nFft);
+      for (int i = 0; i < _nFft; i++) {
+        real[i] = samples[start + i] * window[i];
+      }
+      _fftInPlace(real, imag);
+      for (int k = 1; k < nBins; k++) {
+        avgPower[k] += real[k] * real[k] + imag[k] * imag[k];
+      }
+      frameCount++;
+    }
+
+    if (frameCount == 0) return 0;
+
+    final int minBin = max(1, (8.0 * _nFft / sampleRate).floor());
+    final int maxBin = min(nBins - 1, (1500.0 * _nFft / sampleRate).ceil());
+    int bestBin = minBin;
+    double bestPower = -1.0;
+    for (int k = minBin; k <= maxBin; k++) {
+      if (avgPower[k] > bestPower) {
+        bestPower = avgPower[k];
+        bestBin = k;
+      }
+    }
+
+    final int dominantHz = ((bestBin * sampleRate) / _nFft).round();
+    return dominantHz.clamp(1, 1500);
   }
 
   // ── Core pipeline ───────────────────────────────────────────────────────
@@ -147,7 +246,9 @@ class AudioProcessor {
     final result = List<double>.filled(_targetSamples, 0.0);
     for (int i = 0; i < readFrames; i++) {
       final off = dataStart + i * bytesPerFrame;
-      result[i] = bd.getInt16(off, Endian.little) / 32768.0;
+      if (off + 2 <= bytes.length) {
+        result[i] = bd.getInt16(off, Endian.little) / 32768.0;
+      }
     }
     return result;
   }

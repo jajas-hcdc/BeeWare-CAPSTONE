@@ -110,7 +110,18 @@ class AlertService extends ChangeNotifier {
 
   void dismissAlert(String id) {
     _dismissedAlertIds.add(id);
+    final removed = _alerts.where((a) => a.id == id).toList();
     _alerts.removeWhere((a) => a.id == id);
+    for (final a in removed) {
+      final devKey = NotificationService.extractDeviceKey(
+        payload: a.hiveId,
+        title: a.title,
+        body: a.message,
+      );
+      final cat = NotificationService.classifyAnomalyCategory(a.title, a.message);
+      _dispatchedNotificationIds.remove('${devKey}_$cat');
+      NotificationService().clearDeviceCategoryState(devKey, cat);
+    }
     _saveToCache();
     notifyListeners();
   }
@@ -120,6 +131,7 @@ class AlertService extends ChangeNotifier {
       _dismissedAlertIds.add(a.id);
     }
     _alerts.clear();
+    _dispatchedNotificationIds.clear();
     _saveToCache();
     notifyListeners();
   }
@@ -131,7 +143,6 @@ class AlertService extends ChangeNotifier {
       final encoded = jsonEncode(jsonList);
       await prefs.setString('beeware_cached_alerts', encoded);
       await prefs.setStringList('beeware_dismissed_alerts', _dismissedAlertIds.toList());
-      await prefs.setStringList('beeware_dispatched_notifications', _dispatchedNotificationIds.toList());
     } catch (e) {
       debugPrint('Error saving alerts cache: $e');
     }
@@ -145,10 +156,6 @@ class AlertService extends ChangeNotifier {
       final dismissed = prefs.getStringList('beeware_dismissed_alerts');
       if (dismissed != null) {
         _dismissedAlertIds.addAll(dismissed);
-      }
-      final dispatched = prefs.getStringList('beeware_dispatched_notifications');
-      if (dispatched != null) {
-        _dispatchedNotificationIds.addAll(dispatched);
       }
       final raw = prefs.getString('beeware_cached_alerts');
       if (raw != null && raw.isNotEmpty) {
@@ -286,6 +293,17 @@ class AlertService extends ChangeNotifier {
           acousticClean.startsWith('0 ') ||
           h.acousticStatus.toLowerCase().contains('not detected');
 
+      // If hardware sensors are actively detecting values (> 0 Hz, > 0 °C, > 0%),
+      // immediately clear any previous sensor_not_detected suppression for this device
+      // so that if the microphone is disconnected again, it immediately push-notifies!
+      if (isOnline && !isAcousticNotDetected && !isTempNotDetected && !isHumNotDetected) {
+        _dismissedAlertIds.remove('sensor_acoustic_not_detected_${h.id}');
+        _dismissedAlertIds.remove('sensor_temp_not_detected_${h.id}');
+        _dismissedAlertIds.remove('sensor_hum_not_detected_${h.id}');
+        _dispatchedNotificationIds.remove('${deviceKey}_sensor_not_detected');
+        NotificationService().clearDeviceCategoryState(deviceKey, 'sensor_not_detected');
+      }
+
       if (isTempNotDetected) {
         final alertId = 'sensor_temp_not_detected_${h.id}';
         if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
@@ -382,12 +400,12 @@ class AlertService extends ChangeNotifier {
           );
           result.add(alert);
           if (alert.severity.toLowerCase() == 'critical' || alert.severity.toLowerCase() == 'warning') {
-            primaryNotificationAlert = alert;
+            primaryNotificationAlert ??= alert;
           }
         }
       }
 
-      // Dispatch at most ONE notification per online hive when an anomaly is active
+      // Dispatch notification when an anomaly (such as microphone disconnected / 0 Hz) is active
       if (primaryNotificationAlert != null) {
         final category = NotificationService.classifyAnomalyCategory(
           primaryNotificationAlert.title,
@@ -404,8 +422,7 @@ class AlertService extends ChangeNotifier {
           !isHumNotDetected &&
           !isAcousticNotDetected &&
           !h.isAlert) {
-        // Only clear dispatched notification state when the device is actively online
-        // AND confirmed to have normal, healthy sensor readings (never during refresh/loading)
+        // Clear all dispatched notification state when the device is online and healthy
         _dispatchedNotificationIds.removeWhere((key) => key.startsWith('${deviceKey}_'));
         NotificationService().clearDeviceNotificationState(deviceKey);
       }
@@ -430,14 +447,32 @@ class AlertService extends ChangeNotifier {
           alert.message.toUpperCase().contains(deviceKey);
       final String cleanBody = msgAlreadyHasHive ? alert.message : '${alert.hiveId}: ${alert.message}';
 
-      // Trigger a single native phone pop-up notification and in-app heads-up banner
+      // 1. Trigger immediate native phone pop-up push notification and in-app heads-up banner
       NotificationService().showNotification(
-        id: deviceKey.hashCode & 0x7FFFFFFF,
+        id: dispatchKey.hashCode & 0x7FFFFFFF,
         title: alert.title,
         body: cleanBody,
         payload: deviceKey,
         severity: alert.severity,
       );
+
+      // 2. Also dispatch to cloud backend (FCM) if push notifications are enabled
+      if (_pushEnabled) {
+        BackendService()
+            .sendAlert(
+          hiveId: alert.hiveId,
+          queenStatus: alert.queenStatus,
+          title: alert.title,
+          message: cleanBody,
+          severity: alert.severity,
+          recommendation: alert.recommendation,
+          additionalData: {'deviceId': deviceKey},
+        )
+            .catchError((e) {
+          debugPrint('FCM alert push skipped: $e');
+          return false;
+        });
+      }
     }
   }
 

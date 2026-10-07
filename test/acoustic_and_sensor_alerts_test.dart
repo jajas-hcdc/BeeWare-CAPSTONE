@@ -1,7 +1,9 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:beeware_app/models/hive_data.dart';
 import 'package:beeware_app/services/alert_service.dart';
+import 'package:beeware_app/services/audio_processor.dart';
 import 'package:beeware_app/services/hive_service.dart';
 import 'package:beeware_app/services/notification_service.dart';
 import 'package:beeware_app/widgets/sensor_visualizers.dart';
@@ -396,6 +398,202 @@ void main() {
 
       // Must still have dispatched only 1 notification total across all refreshes
       expect(triggered.length, 1);
+
+      await sub.cancel();
+    });
+
+    test('AudioProcessor extracts 128x128x1 mel-spectrogram from WAV bytes and HiveService applies TFLite prediction', () async {
+      // Build a minimal valid 44-byte RIFF WAV header + 4096 bytes of 16-bit PCM samples
+      const int pcmLen = 4096;
+      final wav = Uint8List(44 + pcmLen);
+      final view = ByteData.view(wav.buffer);
+      wav[0] = 0x52; wav[1] = 0x49; wav[2] = 0x46; wav[3] = 0x46; // "RIFF"
+      view.setUint32(4, 36 + pcmLen, Endian.little);
+      wav[8] = 0x57; wav[9] = 0x41; wav[10] = 0x56; wav[11] = 0x45; // "WAVE"
+      wav[12] = 0x66; wav[13] = 0x6D; wav[14] = 0x74; wav[15] = 0x20; // "fmt "
+      view.setUint32(16, 16, Endian.little);
+      view.setUint16(20, 1, Endian.little); // PCM
+      view.setUint16(22, 1, Endian.little); // 1 channel
+      view.setUint32(24, 16000, Endian.little);
+      view.setUint32(28, 32000, Endian.little);
+      view.setUint16(32, 2, Endian.little);
+      view.setUint16(34, 16, Endian.little);
+      wav[36] = 0x64; wav[37] = 0x61; wav[38] = 0x74; wav[39] = 0x61; // "data"
+      view.setUint32(40, pcmLen, Endian.little);
+
+      final tensor = await AudioProcessor.extractMelSpectrogramFromBytes(wav);
+      expect(tensor.length, 128);
+      expect(tensor.first.length, 128);
+      expect(tensor.first.first.length, 1);
+
+      // Verify HiveService applies TFLite prediction and retains it across telemetry polls
+      final epochNow = DateTime.now().millisecondsSinceEpoch;
+      hiveService.addHive(
+        HiveData(
+          id: 'hive_ai_test',
+          name: 'AI Test Hive',
+          deviceId: 'BW-AI-TEST',
+          conditionLabel: 'Queen Present',
+          confidence: 90,
+          healthScore: 90,
+          temperature: '34.0',
+          humidity: '60',
+          acoustic: '195 Hz',
+          acousticStatus: 'Normal',
+          updated: 'Just now',
+          isAlert: false,
+          alertLabel: 'Normal',
+          alertMessage: 'Active',
+          lastAudioCreatedAt: epochNow,
+        ),
+      );
+
+      hiveService.applyAiModelPrediction(
+        deviceId: 'BW-AI-TEST',
+        recordingEpoch: epochNow,
+        prediction: 'Queen Accepted',
+        confidence: 93,
+        frequencyHz: 195,
+      );
+
+      final afterAi = hiveService.getHiveById('hive_ai_test');
+      expect(afterAi?.conditionLabel, 'Queen Accepted');
+      expect(afterAi?.confidence, 93);
+      expect(afterAi?.queenAcceptedDetected, isTrue);
+      expect(afterAi?.explanation, contains('TFLite Model'));
+
+      // Verify that frequencies in Mel Bands 0-3 (0-89 Hz) classify as No Buzz Detected
+      // while preserving and displaying the received Hz value
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-AI-TEST',
+          'temperature': 34.0,
+          'humidity': 60.0,
+          'frequency': 65,
+          'frequency_hz': 65,
+        }
+      ]);
+      final lowRumble = hiveService.getHiveById('hive_ai_test')!;
+      expect(lowRumble.conditionLabel, 'No Buzz Detected');
+      expect(lowRumble.acoustic, '65 Hz');
+      expect(lowRumble.acousticStatus, 'No Buzz (65 Hz)');
+      expect(lowRumble.isLowFreqNoBuzz, isTrue);
+      expect(lowRumble.isAcousticNotDetected, isFalse);
+      expect(lowRumble.isNoBuzzDetected, isTrue);
+    });
+
+    testWidgets('AcousticSignalVisualizer displays received Hz when 1-89 Hz classifies as No Buzz Detected', (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: AcousticSignalVisualizer(
+              acoustic: '65 Hz',
+              acousticStatus: 'No Buzz (65 Hz)',
+              conditionLabel: 'No Buzz Detected',
+            ),
+          ),
+        ),
+      );
+      expect(find.text('65 Hz • No Buzz'), findsOneWidget);
+    });
+
+    test('Microphone disconnect (0 Hz) triggers push notification even after recovery to 1-89 Hz or normal', () async {
+      final triggeredTitles = <String>[];
+      final sub = alertService.onAlertTriggered.listen((a) => triggeredTitles.add(a.title));
+
+      hiveService.addHive(
+        HiveData(
+          id: 'hive_mic_test',
+          name: 'Hive Mic Test',
+          deviceId: 'BW-MIC-99',
+          conditionLabel: 'Queen Present',
+          confidence: 95,
+          healthScore: 95,
+          temperature: '34.0',
+          humidity: '60',
+          acoustic: '195 Hz',
+          acousticStatus: 'Normal',
+          updated: 'Just now',
+          wifiStatus: 'Connected',
+          isAlert: false,
+          alertLabel: 'Normal',
+          alertMessage: 'Active',
+        ),
+      );
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+      expect(triggeredTitles, isEmpty);
+
+      // 1. Microphone disconnected -> 0 Hz
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-MIC-99',
+          'temperature': 34.0,
+          'humidity': 60.0,
+          'frequency': 0,
+          'frequency_hz': 0,
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+      expect(triggeredTitles.length, 1);
+      expect(triggeredTitles.last, contains('0 Hz'));
+
+      // 2. Microphone reconnected -> detects 65 Hz (No Buzz Detected, > 0 Hz)
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-MIC-99',
+          'temperature': 34.0,
+          'humidity': 60.0,
+          'frequency': 65,
+          'frequency_hz': 65,
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+
+      // 3. Microphone disconnected again -> 0 Hz must immediately push notify again!
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-MIC-99',
+          'temperature': 34.0,
+          'humidity': 60.0,
+          'frequency': 0,
+          'frequency_hz': 0,
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+      expect(triggeredTitles.length, 2);
+      expect(triggeredTitles.last, contains('0 Hz'));
+
+      // 4. Inactive IoT device (> 10 min old epoch or no active telemetry) must NOT send notifications
+      final staleEpoch = DateTime.now().subtract(const Duration(minutes: 25)).millisecondsSinceEpoch;
+      hiveService.addHive(
+        HiveData(
+          id: 'hive_inactive_iot',
+          name: 'Hive Inactive IoT',
+          deviceId: 'BW-INACTIVE-01',
+          conditionLabel: 'No Buzz Detected',
+          confidence: 0,
+          healthScore: 0,
+          temperature: '0.0',
+          humidity: '0',
+          acoustic: '0 Hz',
+          acousticStatus: 'Not Detected (0 Hz)',
+          updated: 'Just now',
+          wifiStatus: 'Connected',
+          isAlert: true,
+          alertSeverity: 'Critical',
+          alertLabel: '⚠️ Acoustic Signal Not Detected (0 Hz)',
+          alertMessage: 'Acoustic microphone on Hive Inactive IoT is detecting 0 Hz.',
+          lastAudioCreatedAt: staleEpoch,
+        ),
+      );
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+      // Count must remain 2 — no notification sent for inactive IoT device
+      expect(triggeredTitles.length, 2);
 
       await sub.cancel();
     });

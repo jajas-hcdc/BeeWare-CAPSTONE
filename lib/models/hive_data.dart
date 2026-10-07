@@ -123,6 +123,14 @@ class HiveData {
     return 'Last seen: $updated';
   }
 
+  int get parsedFrequencyHz {
+    final m = RegExp(r'(\d+)').firstMatch(acoustic);
+    if (m != null) {
+      return int.tryParse(m.group(1)!) ?? 0;
+    }
+    return 0;
+  }
+
   bool get isAcousticNotDetected {
     final clean = acoustic.trim().toLowerCase();
     return clean == '0' ||
@@ -131,20 +139,30 @@ class HiveData {
         acousticStatus.toLowerCase().contains('not detected');
   }
 
+  bool get isLowFreqNoBuzz {
+    if (isAcousticNotDetected) return false;
+    final f = parsedFrequencyHz;
+    return (f > 0 && f < 90) ||
+        conditionLabel.toLowerCase().contains('no buzz') ||
+        acousticStatus.toLowerCase().contains('no buzz');
+  }
+
+  bool get isNoBuzzDetected => isAcousticNotDetected || isLowFreqNoBuzz;
+
   bool get isQueenAbsentDetected =>
-      !isAcousticNotDetected &&
+      !isNoBuzzDetected &&
       (queenAbsentDetected || conditionLabel.toLowerCase().contains('absent'));
 
   bool get isQueenAcceptedDetected =>
-      !isAcousticNotDetected &&
+      !isNoBuzzDetected &&
       (queenAcceptedDetected || conditionLabel.toLowerCase().contains('accepted'));
 
   bool get isQueenRejectedDetected =>
-      !isAcousticNotDetected &&
+      !isNoBuzzDetected &&
       (queenRejectedDetected || conditionLabel.toLowerCase().contains('rejected'));
 
   bool get isQueenPresentDetected =>
-      !isAcousticNotDetected &&
+      !isNoBuzzDetected &&
       !isQueenAbsentDetected &&
       !isQueenAcceptedDetected &&
       !isQueenRejectedDetected &&
@@ -249,18 +267,21 @@ class HiveData {
     final acousticRaw = (data['acoustic'] ?? 'Normal Activity').toString();
     final acousticStatusRaw = (data['acousticStatus'] ?? 'Normal').toString();
     final freqVal = data['frequency'] ?? data['frequency_hz'];
-
-    final bool isAcousticZero = acousticRaw.trim() == '0 Hz' ||
-        acousticRaw.trim() == '0' ||
-        acousticRaw.trim().startsWith('0 ') ||
-        acousticStatusRaw.toLowerCase().contains('not detected') ||
-        freqVal == 0;
-
     final num? parsedFreq = freqVal is num ? freqVal : num.tryParse(freqVal?.toString() ?? '');
-    final bool isFreqQueenPresent = parsedFreq != null && parsedFreq >= 50 && parsedFreq <= 260;
-    final bool isFreqQueenAbsent = parsedFreq != null && parsedFreq > 320;
+    final int? freqInt = parsedFreq?.toInt();
 
-    if (isAcousticZero && (condition == 'Queen Present' || condition.isEmpty)) {
+    final bool isAcousticZero = (freqInt != null && freqInt == 0) ||
+        (freqInt == null &&
+            (acousticRaw.trim() == '0 Hz' ||
+                acousticRaw.trim() == '0' ||
+                acousticRaw.trim().startsWith('0 ') ||
+                acousticStatusRaw.toLowerCase().contains('not detected')));
+
+    final bool isFreqBelowBeeBand = freqInt != null && freqInt > 0 && freqInt < 90;
+    final bool isFreqQueenPresent = freqInt != null && freqInt >= 90 && freqInt <= 260;
+    final bool isFreqQueenAbsent = freqInt != null && freqInt > 320;
+
+    if ((isAcousticZero || isFreqBelowBeeBand) && (condition == 'Queen Present' || condition.isEmpty)) {
       condition = 'No Buzz Detected';
     } else if (isFreqQueenPresent && (condition.isEmpty || condition == 'Normal')) {
       condition = 'Queen Present';
@@ -268,13 +289,13 @@ class HiveData {
       condition = 'Queen Absent';
     }
 
-    final isAbsent = (condition.toLowerCase().contains('absent') || isFreqQueenAbsent) && !isFreqQueenPresent;
-    final isRejected = condition.toLowerCase().contains('rejected') && !isFreqQueenPresent;
-    final isAccepted = condition.toLowerCase().contains('accepted');
-    final isPresent = (isFreqQueenPresent || (!isAbsent && !isRejected && !isAccepted)) && !isAcousticZero;
+    final isAbsent = (condition.toLowerCase().contains('absent') || isFreqQueenAbsent) && !isFreqQueenPresent && !isFreqBelowBeeBand;
+    final isRejected = condition.toLowerCase().contains('rejected') && !isFreqQueenPresent && !isFreqBelowBeeBand;
+    final isAccepted = condition.toLowerCase().contains('accepted') && !isFreqBelowBeeBand;
+    final isPresent = (isFreqQueenPresent || (!isAbsent && !isRejected && !isAccepted && !isFreqBelowBeeBand)) && !isAcousticZero;
 
     int parsedHealth = (data['healthScore'] as num?)?.toInt() ?? 90;
-    if (isAcousticZero) {
+    if (isAcousticZero || isFreqBelowBeeBand) {
       parsedHealth = (parsedHealth > 30) ? 30 : parsedHealth;
     } else if (isAbsent) {
       parsedHealth = (parsedHealth > 45) ? 45 : parsedHealth;
@@ -302,10 +323,11 @@ class HiveData {
       return fallback;
     }
 
-    final bool queenAbsentVal = !isAcousticZero && (isAbsent || data['queenAbsentDetected'] == true);
-    final bool queenAcceptedVal = !isAcousticZero && (isAccepted || data['queenAcceptedDetected'] == true);
-    final bool queenRejectedVal = !isAcousticZero && (isRejected || data['queenRejectedDetected'] == true);
+    final bool queenAbsentVal = !isAcousticZero && !isFreqBelowBeeBand && (isAbsent || data['queenAbsentDetected'] == true);
+    final bool queenAcceptedVal = !isAcousticZero && !isFreqBelowBeeBand && (isAccepted || data['queenAcceptedDetected'] == true);
+    final bool queenRejectedVal = !isAcousticZero && !isFreqBelowBeeBand && (isRejected || data['queenRejectedDetected'] == true);
     final bool queenPresentVal = !isAcousticZero &&
+        !isFreqBelowBeeBand &&
         !queenAbsentVal &&
         !queenAcceptedVal &&
         !queenRejectedVal &&
@@ -330,6 +352,34 @@ class HiveData {
                         ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
                         : 'Colony is queenright and stable. Continue regular monitoring.'))));
 
+    final int? parsedLastEpoch =
+        (data['lastAudioCreatedAt'] ?? data['last_audio_epoch'] ?? data['last_audio_created_at'] as num?)?.toInt();
+    String effectiveWifi = (data['wifiStatus'] ?? 'Connected').toString();
+    String effectiveUpdated = (data['updated'] ?? 'Just now').toString();
+    if (parsedLastEpoch != null && parsedLastEpoch > 1700000000000) {
+      final int ageMs = DateTime.now().millisecondsSinceEpoch - parsedLastEpoch;
+      if (ageMs > 10 * 60 * 1000) {
+        effectiveWifi = 'Offline';
+        final int ageMin = ageMs ~/ (60 * 1000);
+        if (ageMin < 60) {
+          effectiveUpdated = '$ageMin min ago';
+        } else if (ageMin < 1440) {
+          effectiveUpdated = '${ageMin ~/ 60} hr ago';
+        } else {
+          effectiveUpdated = '${ageMin ~/ 1440} days ago';
+        }
+      }
+    }
+
+    final String resolvedAcoustic = isAcousticZero
+        ? '0 Hz'
+        : ((freqInt != null && freqInt > 0 && !acousticRaw.toLowerCase().contains('hz'))
+            ? '$freqInt Hz'
+            : acousticRaw);
+    final String resolvedAcousticStatus = isAcousticZero
+        ? 'Not Detected (0 Hz)'
+        : (isFreqBelowBeeBand ? 'No Buzz ($freqInt Hz)' : acousticStatusRaw);
+
     return HiveData(
       id: id,
       name: data['name'] ?? 'Hive',
@@ -340,10 +390,11 @@ class HiveData {
       healthScore: parsedHealth,
       temperature: data['temperature']?.toString() ?? '34.0',
       humidity: data['humidity']?.toString() ?? '60',
-      acoustic: isAcousticZero ? '0 Hz' : acousticRaw,
-      acousticStatus: isAcousticZero ? 'Not Detected (0 Hz)' : acousticStatusRaw,
-      wifiStatus: data['wifiStatus'] ?? 'Connected',
+      acoustic: resolvedAcoustic,
+      acousticStatus: resolvedAcousticStatus,
+      wifiStatus: effectiveWifi,
       batteryLevel: () {
+        if (effectiveWifi == 'Offline') return 'Offline';
         final raw = data['batteryLevel'] ?? data['battery_level'] ?? data['power_source'] ?? data['battery_status'];
         if (raw == null) return 'Plugged In';
         final str = raw.toString().trim();
@@ -358,8 +409,8 @@ class HiveData {
         }
         return str.endsWith('%') ? str : '$str%';
       }(),
-      updated: data['updated'] ?? 'Just now',
-      signalBars: (data['signalBars'] as num?)?.toInt() ?? 4,
+      updated: effectiveUpdated,
+      signalBars: effectiveWifi == 'Offline' ? 0 : ((data['signalBars'] as num?)?.toInt() ?? 4),
       explanation: (data['explanation'] != null &&
               data['explanation'] !=
                   'The AI analyzed the hive\'s acoustic, temperature, and humidity data and classified the colony state.')

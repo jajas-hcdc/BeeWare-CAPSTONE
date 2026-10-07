@@ -1,0 +1,28 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "telemetry": {
+      ".read": true,
+      "$deviceId": {
+        ".write": "newData.hasChildren(['temperature', 'humidity'])"
+      }
+    },
+    "telemetry_history": {
+      ".read": true,
+      "$deviceId": {
+        ".write": true
+      }
+    },
+    "audio_history": {
+      ".read": true,
+      "$deviceId": {
+        ".write": true
+      }
+    },
+    "alerts": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}

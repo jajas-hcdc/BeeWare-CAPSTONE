@@ -15,6 +15,7 @@ import 'services/user_profile_service.dart';
 import 'services/auth_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/backend_service.dart';
+import 'services/model_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/offline_screen.dart';
 import 'theme/app_theme.dart';
@@ -43,6 +44,11 @@ void main() async {
   await NotificationService().initialize();
   FirebaseService().initializeFCM();
   await UserProfileService().initialize();
+  try {
+    await ModelService().initialize();
+  } catch (e) {
+    debugPrint('ℹ️ TFLite model pre-load skipped: $e');
+  }
 
   // Wake up Render backend if sleeping on free tier
   BackendService().wakeUpBackend();

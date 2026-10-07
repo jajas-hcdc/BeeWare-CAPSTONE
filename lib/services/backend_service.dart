@@ -168,6 +168,9 @@ class BackendService {
     String? recommendation,
     Map<String, dynamic>? additionalData,
   }) async {
+    if (!kIsWeb && const bool.fromEnvironment('FLUTTER_TEST', defaultValue: false)) {
+      return false;
+    }
     final userId = AuthService().currentUser?.uid;
 
     // Normalize queenStatus so it conforms to Render's validator

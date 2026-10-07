@@ -265,7 +265,10 @@ class ExportService {
 
 
 
-  /// Download high-resolution QR sticker PNG from URL and share/save to gallery or files
+  static const MethodChannel _galleryChannel =
+      MethodChannel('com.example.beeware_app/gallery');
+
+  /// Download high-resolution QR sticker PNG from URL and automatically save it directly to the phone's Gallery
   static Future<void> downloadAndShareQrSticker(BuildContext context, HiveData hive) async {
     try {
       final url = hive.effectiveQrCodeUrl;
@@ -275,37 +278,77 @@ class ExportService {
       }
 
       final bytes = response.bodyBytes;
-      final tempDir = await getTemporaryDirectory();
       final cleanDevId = hive.deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
-      final tempFile = File('${tempDir.path}/BeeWare_QR_$cleanDevId.png');
-      await tempFile.writeAsBytes(bytes);
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'BeeWare_QR_${cleanDevId}_$ts.png';
 
-      // Attempt to save to public Downloads directory if available on Android
-      try {
-        final downloadDir = Directory('/storage/emulated/0/Download');
-        if (downloadDir.existsSync()) {
-          final destFile = File('${downloadDir.path}/BeeWare_QR_$cleanDevId.png');
-          await destFile.writeAsBytes(bytes);
-          debugPrint('QR Sticker also saved directly to: ${destFile.path}');
+      bool savedToGallery = false;
+
+      // 1. Save via native Android MediaStore (Pictures/BeeWare in Gallery)
+      if (Platform.isAndroid) {
+        try {
+          final uri = await _galleryChannel.invokeMethod<String>(
+            'saveImageToGallery',
+            {
+              'bytes': bytes,
+              'fileName': fileName,
+            },
+          );
+          if (uri != null && uri.isNotEmpty) {
+            savedToGallery = true;
+            debugPrint('✅ QR Sticker saved to Android MediaStore Gallery: $uri');
+          }
+        } catch (e) {
+          debugPrint('ℹ️ MediaStore channel fallback to public Gallery directories: $e');
         }
-      } catch (e) {
-        debugPrint('Direct Downloads folder write skipped: $e');
       }
 
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(tempFile.path, mimeType: 'image/png')],
-          subject: 'BeeWare Hive QR Code Sticker - ${hive.name}',
-          text: 'Official BeeWare QR Sticker for ${hive.name} (${hive.deviceId}).\nScan using BeeWare app to connect.\n\nDirect Download Link:\n${hive.effectiveQrCodeUrl}',
-        ),
-      );
+      // 2. Also write to public Gallery directories (Pictures/BeeWare & DCIM/Camera)
+      // so Android's FUSE MediaProvider indexes it into the Gallery immediately
+      final galleryDirs = [
+        '/storage/emulated/0/Pictures/BeeWare',
+        '/storage/emulated/0/DCIM/Camera',
+        '/storage/emulated/0/Pictures',
+        '/storage/emulated/0/Download',
+      ];
+
+      for (final dirPath in galleryDirs) {
+        try {
+          final dir = Directory(dirPath);
+          if (!dir.existsSync()) {
+            dir.createSync(recursive: true);
+          }
+          if (dir.existsSync()) {
+            final destFile = File('${dir.path}/$fileName');
+            await destFile.writeAsBytes(bytes, flush: true);
+            savedToGallery = true;
+            debugPrint('✅ QR Sticker saved to Gallery path: ${destFile.path}');
+            break;
+          }
+        } catch (e) {
+          debugPrint('Gallery directory write skipped ($dirPath): $e');
+        }
+      }
+
+      // 3. Fallback if neither MediaStore nor public Gallery folder succeeded (e.g. iOS / Desktop)
+      if (!savedToGallery) {
+        final tempDir = await getTemporaryDirectory();
+        final tempFile = File('${tempDir.path}/$fileName');
+        await tempFile.writeAsBytes(bytes, flush: true);
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(tempFile.path, mimeType: 'image/png')],
+            subject: 'BeeWare Hive QR Code Sticker - ${hive.name}',
+          ),
+        );
+      }
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Hive QR Sticker downloaded for ${hive.name}!'),
+            content: Text('✅ ${hive.name} QR Code saved to Gallery!'),
             backgroundColor: const Color(0xFF2E7D32),
-            duration: const Duration(seconds: 2),
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -314,7 +357,7 @@ class ExportService {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to download QR Sticker: $e'),
+            content: Text('Failed to save QR Code to Gallery: $e'),
             backgroundColor: Colors.red.shade700,
           ),
         );

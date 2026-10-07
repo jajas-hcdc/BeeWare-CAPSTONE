@@ -407,8 +407,8 @@ def process_telemetry_background(
     print(f"Battery Level: {battery_level} %")
     print(f"Wi-Fi RSSI:    {wifi_rssi} dBm")
     print(f"Sample Rate:   {sample_rate} Hz")
-    is_acoustic_not_detected = frequency == 0
-    is_queen_present_by_freq = frequency >= 50 and frequency <= 260
+    is_acoustic_not_detected = frequency == 0 or frequency < 90
+    is_queen_present_by_freq = frequency >= 90 and frequency <= 260
     is_queen_absent_by_freq = frequency > 320
 
     cond_label = "No Buzz Detected" if is_acoustic_not_detected else (
@@ -434,11 +434,11 @@ def process_telemetry_background(
         if fb_client:
             hive_id = f"hive_{device_id.lower().replace('-', '_')}"
             explanation_text = (
-                f"Stable worker humming ({frequency} Hz, 50-260 Hz) combined with standard hive harmonics confirms Queen Present."
+                f"Stable worker humming ({frequency} Hz, 90-260 Hz) combined with standard hive harmonics confirms Queen Present."
                 if is_queen_present_by_freq else (
                     f"Acoustic frequency ({frequency} Hz) indicates Queenless Roar. Urgent frame inspection needed."
                     if is_queen_absent_by_freq else (
-                        "⚠️ No buzz detected (0 Hz / Silent)." if is_acoustic_not_detected else
+                        "⚠️ No buzz detected (0-89 Hz / Silent)." if is_acoustic_not_detected else
                         "The AI analyzed the hive's acoustic, temperature, and humidity data and classified the colony state."
                     )
                 )
@@ -451,11 +451,11 @@ def process_telemetry_background(
                 "frequency": frequency,
                 "frequency_hz": frequency,
                 "acoustic": f"{frequency} Hz" if frequency > 0 else "0 Hz",
-                "acousticStatus": "Normal" if frequency > 0 else "Not Detected (0 Hz)",
+                "acousticStatus": "Normal" if frequency >= 90 else (f"No Buzz ({frequency} Hz)" if frequency > 0 else "Not Detected (0 Hz)"),
                 "conditionLabel": cond_label,
                 "explanation": explanation_text,
-                "confidence": 95 if is_queen_present_by_freq else (90 if frequency > 0 else 50),
-                "queenPresentDetected": is_queen_present_by_freq or (frequency > 0 and not is_queen_absent_by_freq),
+                "confidence": 95 if is_queen_present_by_freq else (90 if frequency >= 90 else 50),
+                "queenPresentDetected": is_queen_present_by_freq or (frequency >= 90 and not is_queen_absent_by_freq),
                 "queenAbsentDetected": is_queen_absent_by_freq,
                 "queenAcceptedDetected": False,
                 "queenRejectedDetected": False,
@@ -499,8 +499,8 @@ def send_fcm_telemetry_notification(
         if frequency == 0:
             missing_sensors.append("Acoustics (0 Hz)")
 
-        # Acoustic rule: 50 to 260 Hz = Queen Present
-        is_queen_present_freq = (frequency >= 50 and frequency <= 260)
+        # Acoustic rule: 90 to 260 Hz = Queen Present
+        is_queen_present_freq = (frequency >= 90 and frequency <= 260)
         is_queen_absent_freq = frequency > 320
         cond_lower = (queen_status or "").lower()
         is_queen_absent = (is_queen_absent_freq or "absent" in cond_lower) and not is_queen_present_freq
@@ -517,7 +517,17 @@ def send_fcm_telemetry_notification(
         body = None
         severity = "Warning"
 
-        if is_queen_absent:
+        if missing_sensors:
+            anomaly_key = f"missing_sensor_{','.join(missing_sensors)}"
+            if frequency == 0 and len(missing_sensors) == 1:
+                title = f"⚠️ Acoustic Signal Not Detected (0 Hz)"
+                body = f"Acoustic microphone on {device_id} is detecting 0 Hz (silent or disconnected). Please inspect INMP441 wiring."
+                severity = "Critical"
+            else:
+                title = f"⚠️ SENSOR ALERT: {device_id}"
+                body = f"Sensor(s) not detected: {', '.join(missing_sensors)}. Please inspect node wiring and power."
+                severity = "Critical"
+        elif is_queen_absent:
             anomaly_key = "queen_absent"
             title = f"🚨 CRITICAL ALERT: {device_id} Queen Absent!"
             body = f"Elevated frequency ({frequency} Hz) detected! Inspect brood frames for emergency queen cells immediately."
@@ -546,11 +556,6 @@ def send_fcm_telemetry_notification(
             anomaly_key = "low_hum"
             title = f"⚠️ LOW HUMIDITY: {device_id} ({hum:.0f}%)"
             body = f"Dry hive conditions ({hum:.0f}%) detected! Ensure water source is accessible."
-            severity = "Warning"
-        elif missing_sensors:
-            anomaly_key = "missing_sensor"
-            title = f"⚠️ SENSOR ALERT: {device_id}"
-            body = f"Sensor(s) not detected: {', '.join(missing_sensors)}. Please inspect node wiring and power."
             severity = "Warning"
         elif is_low_battery:
             anomaly_key = "low_battery"

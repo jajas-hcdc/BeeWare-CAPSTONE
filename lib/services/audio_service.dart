@@ -8,6 +8,9 @@ import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/audio_recording_model.dart';
+import 'audio_processor.dart';
+import 'hive_service.dart';
+import 'model_service.dart';
 
 class AudioService extends ChangeNotifier {
   static final AudioService _instance = AudioService._internal();
@@ -31,6 +34,7 @@ class AudioService extends ChangeNotifier {
   bool _isPlaying = false;
   String? _activePlayingId;
   final Map<String, List<AudioRecordingModel>> _recordingsCache = {};
+  final Map<String, ({int createdAt, String condition, int confidence})> _inferredClipsByDevice = {};
 
   bool get isRecording => _isRecording;
   bool get isPlaying => _isPlaying;
@@ -272,6 +276,88 @@ class AudioService extends ChangeNotifier {
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     final trimmed = list.take(5).toList();
+
+    // Run on-device TFLite model (assets/beeware_model.tflite) & FFT frequency extraction on ESP32 audio clips
+    if (trimmed.isNotEmpty) {
+      final latest = trimmed.first;
+      int effectiveHz = latest.frequency;
+      Uint8List? wavBytes;
+
+      if (latest.audioBase64 != null && latest.audioBase64!.trim().isNotEmpty) {
+        try {
+          final cleanBase64 = latest.audioBase64!.trim().replaceAll('\n', '').replaceAll('\r', '');
+          var bytes = base64Decode(cleanBase64);
+          if (bytes.length >= 4 &&
+              !(bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46)) {
+            bytes = _addWavHeader(bytes, 16000, 1, 16);
+          }
+          wavBytes = bytes;
+          if (effectiveHz <= 0) {
+            final measuredHz = await AudioProcessor.computeDominantFrequencyHz(bytes);
+            if (measuredHz > 0) {
+              effectiveHz = measuredHz;
+            }
+          }
+        } catch (e) {
+          debugPrint('ℹ️ ESP32 audio WAV decode skipped: $e');
+        }
+      }
+
+      if (effectiveHz < 90) {
+        trimmed[0] = latest.copyWith(
+          frequency: effectiveHz,
+          condition: 'No Buzz Detected',
+        );
+        if (effectiveHz > 0) {
+          HiveService().applyAiModelPrediction(
+            deviceId: cleanId,
+            recordingEpoch: latest.createdAt,
+            prediction: 'No Buzz Detected',
+            confidence: 60,
+            frequencyHz: effectiveHz,
+          );
+        }
+      } else if (wavBytes != null) {
+        final prevInferred = _inferredClipsByDevice[cleanId];
+        if (prevInferred != null && prevInferred.createdAt == latest.createdAt) {
+          trimmed[0] = latest.copyWith(
+            frequency: effectiveHz,
+            condition: prevInferred.condition,
+          );
+        } else {
+          try {
+            final result = await ModelService().predictFromWavBytes(
+              wavBytes,
+              frequencyHz: effectiveHz,
+            );
+            if (result != null) {
+              final predLabel = (result['prediction'] ?? latest.condition).toString();
+              final confDouble = (result['confidence'] as num?)?.toDouble() ?? 0.90;
+              final confPct = (confDouble * 100).round().clamp(55, 99);
+              _inferredClipsByDevice[cleanId] = (
+                createdAt: latest.createdAt,
+                condition: predLabel,
+                confidence: confPct,
+              );
+              trimmed[0] = latest.copyWith(
+                frequency: effectiveHz,
+                condition: predLabel,
+              );
+              HiveService().applyAiModelPrediction(
+                deviceId: cleanId,
+                recordingEpoch: latest.createdAt,
+                prediction: predLabel,
+                confidence: confPct,
+                frequencyHz: effectiveHz,
+              );
+            }
+          } catch (e) {
+            debugPrint('ℹ️ ESP32 audio TFLite inference skipped: $e');
+          }
+        }
+      }
+    }
+
     _recordingsCache[cleanId] = trimmed;
 
     try {

@@ -174,6 +174,8 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
   const int32_t NOISE_THRESHOLD = 45;
   int zeroCrossings = 0;
   int prevSign = 0;
+  int32_t dcEstimate = 0;
+  bool dcInitialized = false;
 
   while (samplesReadTotal < totalSamplesToMeasure && (millis() - startMs < 3000)) {
     size_t toRead = min(CHUNK_SAMPLES, totalSamplesToMeasure - samplesReadTotal);
@@ -182,7 +184,14 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
     if (err == ESP_OK && bytesRead > 0) {
       size_t count = bytesRead / sizeof(int32_t);
       for (size_t i = 0; i < count; i++) {
-        int32_t sample = (chunkRaw[i] >> 14) * VOLUME_GAIN;
+        int32_t rawShifted = (chunkRaw[i] >> 14);
+        if (!dcInitialized) {
+          dcEstimate = rawShifted;
+          dcInitialized = true;
+        } else {
+          dcEstimate = (dcEstimate * 63 + rawShifted) / 64;
+        }
+        int32_t sample = (rawShifted - dcEstimate) * VOLUME_GAIN;
         int32_t absSample = abs(sample);
         if (absSample > peakVal) peakVal = absSample;
 
@@ -194,13 +203,13 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
     }
   }
 
-  if (peakVal < 60 || zeroCrossings < 8 || samplesReadTotal == 0) {
+  if (peakVal < 60 || zeroCrossings < 2 || samplesReadTotal == 0) {
     freqHz = 0;
     Serial.println("⚠️ [INMP441] Acoustic silence / not detected (0 Hz)");
   } else {
     float durationSec = (float)samplesReadTotal / (float)SAMPLE_RATE;
     float calculatedHz = (zeroCrossings / 2.0f) / durationSec;
-    freqHz = (calculatedHz >= 40.0f && calculatedHz <= 3500.0f) ? (int)round(calculatedHz) : 0;
+    freqHz = (calculatedHz >= 1.0f && calculatedHz <= 3500.0f) ? (int)round(calculatedHz) : 0;
     Serial.printf("🔊 Frequency: %d Hz (Peak: %d)\n", freqHz, peakVal);
   }
 }
@@ -222,11 +231,11 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
   String conditionLabel = "Queen Present";
   int confidenceVal = 95, healthScoreVal = 95;
 
-  if (freqHz == 0 || freqHz < 50) {
+  if (freqHz == 0 || freqHz < 90) {
     conditionLabel = "No Buzz Detected";
     confidenceVal = 60;
     healthScoreVal = 30;
-  } else if (freqHz >= 50 && freqHz <= 260) {
+  } else if (freqHz >= 90 && freqHz <= 260) {
     conditionLabel = "Queen Present";
     confidenceVal = 95;
     healthScoreVal = 95;
@@ -315,7 +324,7 @@ void uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
   audioSlotCounter = (audioSlotCounter + 1) % 5;
 
   String deviceId = getDeviceId();
-  String condition = freqHz > 320 ? "Queen Absent" : (freqHz >= 50 ? "Queen Present" : "No Buzz Detected");
+  String condition = freqHz > 320 ? "Queen Absent" : (freqHz >= 90 ? "Queen Present" : "No Buzz Detected");
   String timeStr = getFormattedTime();
   String dateStr = getFormattedDate();
   uint64_t epochMs = getEpochMillis();

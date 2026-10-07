@@ -90,6 +90,8 @@ class _HomeScreenState extends State<HomeScreen> {
         int validTempCount = 0;
         double totalHum = 0;
         int validHumCount = 0;
+        double totalFreq = 0;
+        int validFreqCount = 0;
         bool hasAcousticAnomaly = false;
         for (final h in allHives) {
           final t = double.tryParse(h.temperature.replaceAll(RegExp(r'[^0-9.]'), ''));
@@ -102,6 +104,11 @@ class _HomeScreenState extends State<HomeScreen> {
             totalHum += hum;
             validHumCount++;
           }
+          final freq = h.parsedFrequencyHz;
+          if (freq > 0) {
+            totalFreq += freq;
+            validFreqCount++;
+          }
           if (isHiveNoBuzz(h) ||
               h.acousticStatus.toLowerCase().contains('elevated') ||
               h.acousticStatus.toLowerCase().contains('swarming') ||
@@ -111,11 +118,15 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         final avgTempStr = validTempCount > 0 ? (totalTemp / validTempCount).toStringAsFixed(1) : '--';
         final avgHumStr = validHumCount > 0 ? (totalHum / validHumCount).toStringAsFixed(0) : '--';
+        final int avgFreqHz = validFreqCount > 0 ? (totalFreq / validFreqCount).round() : 0;
+        final bool isZeroHzSilence = hasNoBuzzAnomaly && avgFreqHz == 0;
         final apiaryAcoustic = totalHives == 0
             ? 'No Data'
             : (hasNoBuzzAnomaly
-                ? '0 Hz\n(No Buzz)'
-                : (hasAcousticAnomaly ? 'Elevated\nActivity' : 'Normal\nActivity'));
+                ? '$avgFreqHz Hz\n(No Buzz)'
+                : (avgFreqHz > 0
+                    ? (hasAcousticAnomaly ? '$avgFreqHz Hz\n(Elevated)' : '$avgFreqHz Hz\n(Normal)')
+                    : (hasAcousticAnomaly ? 'Elevated\nActivity' : 'Normal\nActivity')));
 
         return Scaffold(
           backgroundColor: AppColors.screenYellow,
@@ -577,7 +588,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Expanded(
                   child: _sensorCard(
                     title: 'Acoustic Signal',
-                    icon: hasNoBuzzAnomaly ? Icons.mic_off_rounded : Icons.show_chart,
+                    icon: isZeroHzSilence ? Icons.mic_off_rounded : Icons.graphic_eq,
                     iconColor: hasNoBuzzAnomaly ? Colors.red : const Color(0xFFFFB300),
                     value: apiaryAcoustic,
                     valueColor: hasNoBuzzAnomaly ? Colors.red : null,

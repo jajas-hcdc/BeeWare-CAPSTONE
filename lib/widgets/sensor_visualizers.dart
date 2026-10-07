@@ -432,6 +432,9 @@ class AcousticSignalVisualizer extends StatelessWidget {
 
     final acousticClean = (acoustic ?? '').trim().toLowerCase();
     final statusClean = acousticStatus.trim().toLowerCase();
+    final freqMatch = RegExp(r'(\d+)').firstMatch(acousticClean);
+    final int parsedHz = freqMatch != null ? (int.tryParse(freqMatch.group(1)!) ?? 0) : 0;
+
     final isNotDetected = acousticClean == '0' ||
         acousticClean == '0 hz' ||
         acousticClean.startsWith('0 ') ||
@@ -439,10 +442,19 @@ class AcousticSignalVisualizer extends StatelessWidget {
         statusClean.contains('0 hz') ||
         statusClean.contains('offline');
 
+    final isLowFreqNoBuzz = !isNotDetected &&
+        ((parsedHz > 0 && parsedHz < 90) ||
+            conditionLabel.toLowerCase().contains('no buzz') ||
+            statusClean.contains('no buzz'));
+
     if (isNotDetected) {
       barColor = Colors.grey.shade400;
       // Flat silent equalizer line when no acoustic signal or 0 Hz detected
       heights = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1];
+    } else if (isLowFreqNoBuzz) {
+      barColor = const Color(0xFFD32F2F);
+      // Low 0-89 Hz rumble bars (Bands 0-3)
+      heights = [0.22, 0.28, 0.25, 0.18, 0.24, 0.20, 0.15, 0.22, 0.18, 0.15, 0.20, 0.16, 0.14, 0.18, 0.15];
     } else {
       final condition = conditionLabel.toLowerCase();
       if (condition.contains('absent')) {
@@ -467,6 +479,11 @@ class AcousticSignalVisualizer extends StatelessWidget {
     String readoutText;
     if (isNotDetected) {
       readoutText = '0 Hz • Not Detected';
+    } else if (isLowFreqNoBuzz) {
+      final hzLabel = (acoustic != null && acoustic!.trim().isNotEmpty)
+          ? acoustic!.trim()
+          : '$parsedHz Hz';
+      readoutText = '$hzLabel • No Buzz';
     } else if (acoustic != null && acoustic!.toLowerCase().contains('hz')) {
       readoutText = '${acoustic!.trim()} • Active';
     } else {

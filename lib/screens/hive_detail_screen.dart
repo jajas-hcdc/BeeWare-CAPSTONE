@@ -224,6 +224,8 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
         acousticClean == '0 hz' ||
         acousticClean.startsWith('0 ') ||
         _hive.acousticStatus.toLowerCase().contains('not detected');
+    final isLowFreqNoBuzz = !isAcousticNotDetected && _hive.isLowFreqNoBuzz;
+    final isAnyNoBuzz = isAcousticNotDetected || isLowFreqNoBuzz;
     final hasSensorNotDetected = isTempNotDetected || isHumNotDetected || isAcousticNotDetected;
 
     String overviewDesc;
@@ -235,6 +237,9 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
     } else if (isAcousticNotDetected) {
       overviewDesc = 'No buzz detected (0 Hz / Silent). Acoustic activity is absent or microphone is disconnected.';
       conditionActionDesc = 'No Buzz Detected (0 Hz).\nInspect microphone or check hive activity.';
+    } else if (isLowFreqNoBuzz) {
+      overviewDesc = 'Low frequency received (${_hive.acoustic} in 0–89 Hz Band 0–3). Classified as No Buzz Detected.';
+      conditionActionDesc = 'No Buzz Detected (${_hive.acoustic}).\nFrequency is below the 90 Hz bee buzzing range.';
     } else if (_hive.conditionLabel.toLowerCase().contains('absent')) {
       overviewDesc = 'Acoustic frequency indicates Queenless Roar. Urgent frame inspection needed.';
       conditionActionDesc = 'Urgent Intervention Required.\nInspect brood frames for queen cells.';
@@ -314,7 +319,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                     percentage: isAcousticNotDetected ? 0.0 : _hive.healthScore.toDouble(),
                     size: 78,
                     strokeWidth: 9,
-                    progressColor: isAcousticNotDetected ? const Color(0xFFD32F2F) : _hive.labelColor,
+                    progressColor: isAnyNoBuzz ? const Color(0xFFD32F2F) : _hive.labelColor,
                   ),
                   const SizedBox(width: 18),
                   Expanded(
@@ -322,13 +327,13 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          isAcousticNotDetected
+                          isAnyNoBuzz
                               ? 'No Buzz Detected'
                               : _hive.conditionLabel,
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w900,
-                            color: isAcousticNotDetected ? const Color(0xFFD32F2F) : _hive.labelColor,
+                            color: isAnyNoBuzz ? const Color(0xFFD32F2F) : _hive.labelColor,
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -343,7 +348,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                               : (_hive.confidence > 0 ? 'Confidence: ${_hive.confidence}%' : 'Confidence: Analysis In Progress'),
                           style: const TextStyle(fontSize: 11, color: Colors.black54),
                         ),
-                        if (isAcousticNotDetected) ...[
+                        if (isAnyNoBuzz) ...[
                           const SizedBox(height: 6),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -352,14 +357,16 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(color: const Color(0xFFEF5350)),
                             ),
-                            child: const Row(
+                            child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.volume_off, size: 13, color: Color(0xFFD32F2F)),
-                                SizedBox(width: 4),
+                                const Icon(Icons.volume_off, size: 13, color: Color(0xFFD32F2F)),
+                                const SizedBox(width: 4),
                                 Text(
-                                  'No Buzz Detected (0 Hz)',
-                                  style: TextStyle(
+                                  isAcousticNotDetected
+                                      ? 'No Buzz Detected (0 Hz)'
+                                      : 'No Buzz Detected (${_hive.acoustic})',
+                                  style: const TextStyle(
                                     fontSize: 11,
                                     fontWeight: FontWeight.w800,
                                     color: Color(0xFFD32F2F),
@@ -397,15 +404,15 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isAcousticNotDetected ? const Color(0xFFFFEBEE) : _hive.labelBgColor,
+                        color: isAnyNoBuzz ? const Color(0xFFFFEBEE) : _hive.labelBgColor,
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        isAcousticNotDetected ? 'No Buzz Detected' : _hive.conditionLabel,
+                        isAnyNoBuzz ? 'No Buzz Detected' : _hive.conditionLabel,
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
-                          color: isAcousticNotDetected ? const Color(0xFFC62828) : _hive.labelColor,
+                          color: isAnyNoBuzz ? const Color(0xFFC62828) : _hive.labelColor,
                         ),
                       ),
                     ),
@@ -547,11 +554,15 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            isAcousticNotDetected ? '0 Hz (Not Detected)' : _hive.acoustic,
+                            isAcousticNotDetected
+                                ? '0 Hz (Not Detected)'
+                                : (isLowFreqNoBuzz
+                                    ? '${_hive.acoustic} (No Buzz Detected)'
+                                    : _hive.acoustic),
                             style: TextStyle(
-                              fontSize: isAcousticNotDetected ? 13 : 13,
+                              fontSize: 13,
                               fontWeight: FontWeight.w900,
-                              color: isAcousticNotDetected ? const Color(0xFFD32F2F) : Colors.black,
+                              color: isAnyNoBuzz ? const Color(0xFFD32F2F) : Colors.black,
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -604,6 +615,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
         acousticClean == '0 hz' ||
         acousticClean.startsWith('0 ') ||
         _hive.acousticStatus.toLowerCase().contains('not detected');
+    final isLowFreqNoBuzz = !isAcousticNotDetected && _hive.isLowFreqNoBuzz;
     final hasSensorNotDetected = isTempNotDetected || isHumNotDetected || isAcousticNotDetected;
 
     return Column(
@@ -788,11 +800,15 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                isAcousticNotDetected ? '0 Hz (Not Detected)' : _hive.acoustic,
+                                isAcousticNotDetected
+                                    ? '0 Hz (Not Detected)'
+                                    : (isLowFreqNoBuzz
+                                        ? '${_hive.acoustic} (No Buzz Detected)'
+                                        : _hive.acoustic),
                                 style: TextStyle(
-                                  fontSize: isAcousticNotDetected ? 14 : 15,
+                                  fontSize: (isAcousticNotDetected || isLowFreqNoBuzz) ? 14 : 15,
                                   fontWeight: FontWeight.w900,
-                                  color: isAcousticNotDetected ? const Color(0xFFD32F2F) : Colors.black,
+                                  color: (isAcousticNotDetected || isLowFreqNoBuzz) ? const Color(0xFFD32F2F) : Colors.black,
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -801,10 +817,14 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          isAcousticNotDetected ? 'Status: Not Detected (0 Hz)' : 'Status: ${_hive.acousticStatus}',
+                          isAcousticNotDetected
+                              ? 'Status: Not Detected (0 Hz)'
+                              : (isLowFreqNoBuzz
+                                  ? 'Status: No Buzz Detected (${_hive.acoustic} • 0–89 Hz)'
+                                  : 'Status: ${_hive.acousticStatus}'),
                           style: TextStyle(
                             fontSize: 11,
-                            color: isAcousticNotDetected ? const Color(0xFFD32F2F) : Colors.black54,
+                            color: (isAcousticNotDetected || isLowFreqNoBuzz) ? const Color(0xFFD32F2F) : Colors.black54,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -943,6 +963,8 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
         acousticClean == '0 hz' ||
         acousticClean.startsWith('0 ') ||
         _hive.acousticStatus.toLowerCase().contains('not detected');
+    final isLowFreqNoBuzz = !isAcousticNotDetected && _hive.isLowFreqNoBuzz;
+    final isAnyNoBuzz = isAcousticNotDetected || isLowFreqNoBuzz;
     final hasSensorNotDetected = isTempNotDetected || isHumNotDetected || isAcousticNotDetected;
 
     return Column(
@@ -966,15 +988,15 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isAcousticNotDetected ? const Color(0xFFFFEBEE) : _hive.labelBgColor,
+                        color: isAnyNoBuzz ? const Color(0xFFFFEBEE) : _hive.labelBgColor,
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        isAcousticNotDetected ? 'No Buzz Detected' : _hive.conditionLabel,
+                        isAnyNoBuzz ? 'No Buzz Detected' : _hive.conditionLabel,
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
-                          color: isAcousticNotDetected ? const Color(0xFFC62828) : _hive.labelColor,
+                          color: isAnyNoBuzz ? const Color(0xFFC62828) : _hive.labelColor,
                         ),
                       ),
                     ),
@@ -983,11 +1005,13 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                       isAcousticNotDetected ? 'Confidence: 0%' : 'Confidence: ${_hive.confidence}%',
                       style: const TextStyle(fontSize: 11, color: Colors.black54),
                     ),
-                    if (isAcousticNotDetected) ...[
+                    if (isAnyNoBuzz) ...[
                       const SizedBox(height: 5),
-                      const Text(
-                        '⚠️ No buzz detected (0 Hz / Silent)',
-                        style: TextStyle(
+                      Text(
+                        isAcousticNotDetected
+                            ? '⚠️ No buzz detected (0 Hz / Silent)'
+                            : '⚠️ No buzz detected (${_hive.acoustic} • 0–89 Hz Band 0–3)',
+                        style: const TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
                           color: Color(0xFFD32F2F),
@@ -1069,26 +1093,26 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
               const Divider(color: Colors.black12, height: 18),
               _conditionDetectRow(
                 'Queen Present',
-                isAcousticNotDetected ? false : _hive.isQueenPresentDetected,
-                isDimmed: isAcousticNotDetected,
+                isAnyNoBuzz ? false : _hive.isQueenPresentDetected,
+                isDimmed: isAnyNoBuzz,
               ),
               const Divider(color: Colors.black12, height: 18),
               _conditionDetectRow(
                 'Queen Absent',
-                isAcousticNotDetected ? false : _hive.isQueenAbsentDetected,
-                isDimmed: isAcousticNotDetected,
+                isAnyNoBuzz ? false : _hive.isQueenAbsentDetected,
+                isDimmed: isAnyNoBuzz,
               ),
               const Divider(color: Colors.black12, height: 18),
               _conditionDetectRow(
                 'Queen Accepted',
-                isAcousticNotDetected ? false : _hive.isQueenAcceptedDetected,
-                isDimmed: isAcousticNotDetected,
+                isAnyNoBuzz ? false : _hive.isQueenAcceptedDetected,
+                isDimmed: isAnyNoBuzz,
               ),
               const Divider(color: Colors.black12, height: 18),
               _conditionDetectRow(
                 'Queen Rejected',
-                isAcousticNotDetected ? false : _hive.isQueenRejectedDetected,
-                isDimmed: isAcousticNotDetected,
+                isAnyNoBuzz ? false : _hive.isQueenRejectedDetected,
+                isDimmed: isAnyNoBuzz,
               ),
             ],
           ),
@@ -1106,15 +1130,17 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
             children: [
               _conditionDetectRow(
                 'Colony Acoustic Buzz',
-                !isAcousticNotDetected,
-                overrideStatusText: isAcousticNotDetected ? 'No Buzz\nDetected' : 'Buzzing\nDetected',
-                overrideColor: isAcousticNotDetected ? const Color(0xFFD32F2F) : AppColors.healthyGreen,
+                !isAnyNoBuzz,
+                overrideStatusText: isAnyNoBuzz ? 'No Buzz\nDetected' : 'Buzzing\nDetected',
+                overrideColor: isAnyNoBuzz ? const Color(0xFFD32F2F) : AppColors.healthyGreen,
               ),
-              if (isAcousticNotDetected) ...[
+              if (isAnyNoBuzz) ...[
                 const SizedBox(height: 8),
-                const Text(
-                  'Colony acoustics are currently silent (0 Hz). Ensure the microphone is connected to enable audio-based condition detection.',
-                  style: TextStyle(
+                Text(
+                  isAcousticNotDetected
+                      ? 'Colony acoustics are currently silent (0 Hz). Ensure the microphone is connected to enable audio-based condition detection.'
+                      : 'Microphone received ${_hive.acoustic} (0–89 Hz Mel Bands 0–3 background floor), which is classified as No Buzz Detected.',
+                  style: const TextStyle(
                     fontSize: 11.5,
                     color: Color(0xFFD32F2F),
                     fontWeight: FontWeight.w500,

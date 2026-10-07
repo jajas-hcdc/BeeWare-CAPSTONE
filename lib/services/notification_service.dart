@@ -162,6 +162,16 @@ class NotificationService {
     _lastNotifiedByDevice.remove(key);
   }
 
+  /// Clears the deduplication state for a specific anomaly category on a device
+  /// (e.g. clearing 'sensor_not_detected' as soon as the microphone detects > 0 Hz).
+  void clearDeviceCategoryState(String deviceOrHiveId, String category) {
+    final key = extractDeviceKey(payload: deviceOrHiveId, title: '', body: '');
+    final existing = _lastNotifiedByDevice[key];
+    if (existing != null && existing.category == category) {
+      _lastNotifiedByDevice.remove(key);
+    }
+  }
+
   /// Displays a native system pop-up notification (Heads-Up Banner on phone).
   /// Deduplicates by device and anomaly category so only ONE notification is sent per active anomaly.
   Future<void> showNotification({
@@ -195,10 +205,10 @@ class NotificationService {
       await initialize();
     }
 
-    // Use a single deterministic notification ID per device so Android updates
-    // the existing notification slot instead of stacking multiple notifications.
-    final int notifId = deviceKey.hashCode & 0x7FFFFFFF;
-    final String notifTag = 'beeware_alert_$deviceKey';
+    // Use a deterministic notification ID per device & category so Android pops up
+    // a heads-up notification whenever a microphone disconnect or new anomaly occurs.
+    final int notifId = '${deviceKey}_$category'.hashCode & 0x7FFFFFFF;
+    final String notifTag = 'beeware_alert_${deviceKey}_$category';
 
     final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       channelId,
@@ -211,7 +221,7 @@ class NotificationService {
       icon: '@mipmap/ic_launcher',
       playSound: true,
       enableVibration: true,
-      onlyAlertOnce: true,
+      onlyAlertOnce: false,
       styleInformation: BigTextStyleInformation(
         body,
         contentTitle: title,

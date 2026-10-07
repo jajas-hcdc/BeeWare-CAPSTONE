@@ -274,7 +274,7 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
                             : (absentCount > 0 || rejectedCount > 0
                                 ? '⚠️ Attention Needed: $absentCount hive(s) detected with Queen Absent and $rejectedCount hive(s) with Queen Rejected. Prioritize physical inspections of affected boxes immediately to check for emergency queen cups or introduce new mated queens.'
                                 : (noBuzzHives.isNotEmpty
-                                    ? '⚠️ No Buzz Detected: ${noBuzzHives.length} hive(s) (${noBuzzHives.map((h) => h.name).join(", ")}) currently have no acoustic buzz detected (0 Hz). Inspect microphone hardware connections or verify colony acoustic activity.'
+                                    ? '⚠️ No Buzz Detected: ${noBuzzHives.length} hive(s) (${noBuzzHives.map((h) => "${h.name}: ${h.acoustic}").join(", ")}) currently have no bee buzz detected (< 90 Hz). Inspect microphone hardware connections or verify colony acoustic activity.'
                                     : '✅ All $totalHives monitored colonies are exhibiting normal acoustic buzzing and brood thermoregulation. Continue standard routine apiary checks and maintain clean water sources nearby.')),
                         style: const TextStyle(fontSize: 12, color: Colors.black87, height: 1.4),
                       ),
@@ -422,10 +422,10 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
                       const SizedBox(width: 10),
                       Builder(
                         builder: (context) {
-                          final clean = hive.acoustic.trim().toLowerCase();
-                          final isNoBuzz = clean == '0' || clean == '0 hz' || clean.startsWith('0 ') || hive.acousticStatus.toLowerCase().contains('not detected');
+                          final isNoBuzz = hive.isNoBuzzDetected;
+                          final hzLabel = hive.acoustic.trim().isNotEmpty ? hive.acoustic.trim() : '0 Hz';
                           return Text(
-                            isNoBuzz ? 'Audio: No buzz (0 Hz)' : 'Audio: ${hive.acousticStatus}',
+                            isNoBuzz ? 'Audio: No buzz ($hzLabel)' : 'Audio: $hzLabel (${hive.acousticStatus})',
                             style: TextStyle(
                               fontSize: 11,
                               color: isNoBuzz ? const Color(0xFFD32F2F) : Colors.black87,
