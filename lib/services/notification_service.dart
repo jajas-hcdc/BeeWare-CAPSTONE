@@ -217,6 +217,28 @@ class NotificationService {
     final category = classifyAnomalyCategory(title, body);
     final now = DateTime.now();
 
+    // Enforce strict <= 25.0°C rule for Low Temperature alerts and < 500 Hz for Queen Absent alerts
+    if (category == 'low_temperature' || title.toLowerCase().contains('low temp')) {
+      final tempMatch = RegExp(r'(\d+(?:\.\d+)?)\s*°c', caseSensitive: false).firstMatch('$title $body');
+      if (tempMatch != null) {
+        final parsedTemp = double.tryParse(tempMatch.group(1)!) ?? 0.0;
+        if (parsedTemp > 25.0) {
+          debugPrint('🔕 [BeeWare] Ignored low-temp notification above 25.0°C ($parsedTemp°C): "$title"');
+          return;
+        }
+      }
+    }
+    if (category == 'queen_absent') {
+      final hzMatch = RegExp(r'(\d+)\s*hz', caseSensitive: false).firstMatch('$title $body');
+      if (hzMatch != null) {
+        final parsedHz = int.tryParse(hzMatch.group(1)!) ?? 0;
+        if (parsedHz >= 500) {
+          debugPrint('🔕 [BeeWare] Ignored >= 500 Hz cricket/rain Queen Absent notification ($parsedHz Hz): "$title"');
+          return;
+        }
+      }
+    }
+
     bool canShowSystemPush = allowSystemPush ?? true;
     bool canShowInAppBanner = allowInAppBanner ?? true;
 

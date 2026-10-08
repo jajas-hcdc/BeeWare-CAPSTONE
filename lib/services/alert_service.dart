@@ -251,7 +251,7 @@ class AlertService extends ChangeNotifier {
 
       final tempVal = double.tryParse(matchingHive.temperature.replaceAll('°C', '').trim()) ?? 0.0;
       final titleLower = alert.title.toLowerCase();
-      if (titleLower.contains('low temperature') || alert.id.startsWith('sensor_temp_low_')) {
+      if (titleLower.contains('low temp') || alert.id.startsWith('sensor_temp_low_')) {
         if (tempVal > 25.0) {
           return true;
         }

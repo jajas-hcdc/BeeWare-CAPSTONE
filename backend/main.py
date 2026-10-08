@@ -408,8 +408,8 @@ def process_telemetry_background(
     print(f"Wi-Fi RSSI:    {wifi_rssi} dBm")
     print(f"Sample Rate:   {sample_rate} Hz")
     is_acoustic_not_detected = frequency == 0 or frequency < 90
-    is_queen_present_by_freq = frequency >= 90 and frequency <= 260
-    is_queen_absent_by_freq = frequency > 320
+    is_queen_present_by_freq = (frequency >= 90 and frequency <= 260) or (frequency >= 500)
+    is_queen_absent_by_freq = frequency > 320 and frequency < 500
 
     cond_label = "No Buzz Detected" if is_acoustic_not_detected else (
         "Queen Present" if is_queen_present_by_freq else (
@@ -499,15 +499,15 @@ def send_fcm_telemetry_notification(
         if frequency == 0:
             missing_sensors.append("Acoustics (0 Hz)")
 
-        # Acoustic rule: 90 to 260 Hz = Queen Present
-        is_queen_present_freq = (frequency >= 90 and frequency <= 260)
-        is_queen_absent_freq = frequency > 320
+        # Acoustic rule: 90 to 260 Hz = Queen Present; 321 to 499 Hz = Queen Absent; >= 500 Hz = External crickets/rain
+        is_queen_present_freq = (frequency >= 90 and frequency <= 260) or (frequency >= 500)
+        is_queen_absent_freq = (frequency > 320) and (frequency < 500)
         cond_lower = (queen_status or "").lower()
-        is_queen_absent = (is_queen_absent_freq or "absent" in cond_lower) and not is_queen_present_freq
-        is_queen_rejected = ("rejected" in cond_lower) and not is_queen_present_freq
+        is_queen_absent = (is_queen_absent_freq or ("absent" in cond_lower and frequency < 500)) and not is_queen_present_freq
+        is_queen_rejected = ("rejected" in cond_lower and frequency < 500) and not is_queen_present_freq
 
         is_high_temp = temp > 37.0
-        is_low_temp = (temp > 0.0) and (temp < 32.0)
+        is_low_temp = (temp > 0.0) and (temp <= 25.0)
         is_high_hum = hum > 75.0
         is_low_hum = (hum > 0.0) and (hum < 40.0)
         is_low_battery = (battery > 0) and (battery < 15)
@@ -540,13 +540,13 @@ def send_fcm_telemetry_notification(
         elif is_high_temp:
             anomaly_key = "high_temp"
             title = f"🚨 HIGH TEMP ALERT: {device_id} ({temp:.1f}°C)"
-            body = f"Brood nest overheating risk! Temp is {temp:.1f}°C (Max optimal: 37.0°C). Inspect ventilation and shade."
+            body = f"Brood nest overheating risk! Temp is {temp:.1f}°C (Max optimal: 36.0°C). Inspect ventilation and shade."
             severity = "Critical"
         elif is_low_temp:
             anomaly_key = "low_temp"
-            title = f"⚠️ LOW TEMP ALERT: {device_id} ({temp:.1f}°C)"
-            body = f"Brood nest chilling risk! Temp is {temp:.1f}°C (Min optimal: 32.0°C). Inspect hive insulation and entrance."
-            severity = "Warning"
+            title = f"❄️ LOW TEMP ALERT: {device_id} ({temp:.1f}°C)"
+            body = f"Brood nest chilling risk! Temp is {temp:.1f}°C (Alert threshold: ≤ 25.0°C, Optimal: 32.0°C–36.0°C). Inspect hive insulation and entrance."
+            severity = "Critical"
         elif is_high_hum:
             anomaly_key = "high_hum"
             title = f"⚠️ HIGH HUMIDITY ALERT: {device_id} ({hum:.0f}%)"
