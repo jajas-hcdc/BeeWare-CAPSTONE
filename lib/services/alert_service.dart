@@ -250,7 +250,12 @@ class AlertService extends ChangeNotifier {
       }
 
       final tempVal = double.tryParse(matchingHive.temperature.replaceAll('°C', '').trim()) ?? 0.0;
-      if (alert.title.toLowerCase().contains('temperature') && tempVal > 0) {
+      final titleLower = alert.title.toLowerCase();
+      if (titleLower.contains('low temperature') || alert.id.startsWith('sensor_temp_low_')) {
+        if (tempVal > 25.0) {
+          return true;
+        }
+      } else if (titleLower.contains('temperature') && tempVal > 0) {
         return true;
       }
 
@@ -289,9 +294,10 @@ class AlertService extends ChangeNotifier {
 
       AlertModel? primaryNotificationAlert;
 
-      // Missing sensor diagnostics (temp <= 0.0, hum <= 0.0, acoustic 0 Hz)
+      // Missing sensor diagnostics (temp <= 0.0, hum <= 0.0, acoustic 0 Hz) & Low Temp threshold (<= 25.0°C)
       final tempVal = double.tryParse(h.temperature.replaceAll('°C', '').trim());
       final isTempNotDetected = (tempVal != null && tempVal <= 0.0) || h.temperature == '0.0' || h.temperature == '0';
+      final isLowTempAlert = tempVal != null && tempVal > 0.0 && tempVal <= 25.0;
 
       final humVal = double.tryParse(h.humidity.replaceAll('%', '').trim());
       final isHumNotDetected = (humVal != null && humVal <= 0.0) || h.humidity == '0.0' || h.humidity == '0';
@@ -313,6 +319,13 @@ class AlertService extends ChangeNotifier {
         NotificationService().clearDeviceCategoryState(deviceKey, 'sensor_not_detected');
       }
 
+      // If temperature recovers above 25.0°C, clear low_temperature suppression
+      if (isOnline && !isTempNotDetected && !isLowTempAlert && tempVal != null && tempVal > 25.0) {
+        _dismissedAlertIds.remove('sensor_temp_low_${h.id}');
+        _dispatchedNotificationIds.remove('${deviceKey}_low_temperature');
+        NotificationService().clearDeviceCategoryState(deviceKey, 'low_temperature');
+      }
+
       if (isTempNotDetected) {
         final alertId = 'sensor_temp_not_detected_${h.id}';
         if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
@@ -330,6 +343,29 @@ class AlertService extends ChangeNotifier {
           );
           result.add(alert);
           primaryNotificationAlert ??= alert;
+        }
+      } else if (isLowTempAlert) {
+        final alertId = 'sensor_temp_low_${h.id}';
+        if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
+          seenIds.add(alertId);
+          final alert = AlertModel(
+            id: alertId,
+            hiveId: h.name,
+            queenStatus: h.conditionLabel,
+            title: '❄️ Low Temperature Alert (${tempVal.toStringAsFixed(1)}°C)',
+            message:
+                'Hive temperature on $displayHiveName dropped to ${tempVal.toStringAsFixed(1)}°C (≤ 25.0°C threshold). Optimal brood range is 32.0°C–36.0°C.',
+            severity: 'Critical',
+            timestamp: DateTime.now(),
+            recommendation:
+                'Inspect hive insulation, reduce entrance size, and check cluster strength to prevent chilled brood.',
+            detectedBy: 'DHT22 Thermal Monitor',
+          );
+          result.add(alert);
+          primaryNotificationAlert ??= alert;
+          if (isOnline) {
+            _dispatchNotificationIfNew(deviceKey, '${deviceKey}_low_temperature', alert);
+          }
         }
       }
 
@@ -428,6 +464,7 @@ class AlertService extends ChangeNotifier {
           h.temperature != '--' &&
           h.humidity != '--' &&
           !isTempNotDetected &&
+          !isLowTempAlert &&
           !isHumNotDetected &&
           !isAcousticNotDetected &&
           !h.isAlert) {

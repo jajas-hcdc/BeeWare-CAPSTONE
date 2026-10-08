@@ -218,6 +218,7 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
   int zeroCrossings = 0;
   int prevSign = 0;
   int32_t dcEstimate = 0;
+  int32_t lpStage1 = 0;
   int32_t lowPassSample = 0;
   bool dcInitialized = false;
 
@@ -232,14 +233,17 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
         int32_t rawShifted = (chunkRaw[i] >> 14);
         if (!dcInitialized) {
           dcEstimate = rawShifted;
+          lpStage1 = 0;
           lowPassSample = 0;
           dcInitialized = true;
         } else {
           dcEstimate = (dcEstimate * 63 + rawShifted) / 64;
         }
         int32_t sample = (rawShifted - dcEstimate) * VOLUME_GAIN;
-        // First-order low-pass filter to suppress high-frequency electrical/ambient spikes (>800 Hz)
-        lowPassSample = (lowPassSample * 3 + sample) / 4;
+        // 2-stage cascaded low-pass filter (~450 Hz cutoff) to suppress 500-4000 Hz cricket chirps & rain patter
+        // before counting zero-crossings, isolating the true 90-480 Hz honeybee colony fundamental
+        lpStage1 = (lpStage1 * 7 + sample) / 8;
+        lowPassSample = (lowPassSample * 7 + lpStage1) / 8;
 
         int32_t absSample = abs(lowPassSample);
         if (absSample > peakVal) peakVal = absSample;
@@ -290,10 +294,16 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
     conditionLabel = "Queen Present";
     confidenceVal = 95;
     healthScoreVal = 95;
-  } else if (freqHz > 320) {
+  } else if (freqHz > 320 && freqHz < 500) {
     conditionLabel = "Queen Absent";
     confidenceVal = 88;
     healthScoreVal = 40;
+  } else {
+    // 261-320 Hz transitional or >= 500 Hz external cricket/rain interference:
+    // Keep Queen Present so 500-1000+ Hz weather/insect spikes never trigger false Queen Absent alerts
+    conditionLabel = "Queen Present";
+    confidenceVal = 90;
+    healthScoreVal = 90;
   }
 
   String macStr = WiFi.macAddress();

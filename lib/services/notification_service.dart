@@ -129,12 +129,17 @@ class NotificationService {
     if (text.contains('test_alert') || text.contains('system verified')) {
       return 'test_alert';
     }
+    if (text.contains('low temp') ||
+        text.contains('chilled brood') ||
+        text.contains('≤ 25.0°c') ||
+        text.contains('<= 25.0°c')) {
+      return 'low_temperature';
+    }
     if (text.contains('0 hz') ||
         text.contains('not detected') ||
         text.contains('sensor alert') ||
         text.contains('sensor(s) not detected') ||
-        text.contains('0.0 °c') ||
-        text.contains('0.0°c') ||
+        text.contains('returning 0.0') ||
         text.contains('returning 0%')) {
       return 'sensor_not_detected';
     }

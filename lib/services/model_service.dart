@@ -236,17 +236,21 @@ class ModelService {
 
       // Fuse TFLite dual-head probabilities with Mel-band harmonic signatures and INMP441 Hz
       if (frequencyHz != null && frequencyHz >= 90) {
-        if (frequencyHz >= 90 && frequencyHz <= 260) {
-          // Mel Bands 4-12 (90-260 Hz): Queen Present vs Queen Accepted
-          // If Mel Bands 28-45 (600-1000 Hz piping harmonics) are strong or frequency is 200-260 Hz with strong Accepted score:
-          final bool hasPipingHarmonics = (dbBands28to45 - dbBands4to12) > -14.0;
+        // Check if the 90-280 Hz Queen Present band (Mel Bands 4-12) is stronger than the 300-600 Hz distress band (Mel Bands 13-27).
+        // When crickets/rain (500-4000 Hz) inflate zero-crossing Hz above 320 Hz while the colony is calm,
+        // dbBands4to12 remains stronger than dbBands13to27.
+        final bool queenPresentBandDominates = dbBands4to12 >= (dbBands13to27 - 1.5);
+        final bool isExternalHighHzSpike = frequencyHz >= 500;
+
+        if ((frequencyHz >= 90 && frequencyHz <= 260) || isExternalHighHzSpike || (frequencyHz > 320 && queenPresentBandDominates)) {
+          // Mel Bands 4-12 (90-260 Hz) or external >= 500 Hz cricket/rain spike over a calm colony:
+          final bool hasPipingHarmonics = !isExternalHighHzSpike && (dbBands28to45 - dbBands4to12) > -14.0;
           calibratedWeights[2] *= 2.4 * (0.5 + presenceSoftmax[0]); // Queen Present
           calibratedWeights[1] *= (hasPipingHarmonics ? 2.5 : 1.5) * (0.5 + presenceSoftmax[0]); // Queen Accepted
           calibratedWeights[0] *= 0.25; // Queen Absent
           calibratedWeights[3] *= 0.25; // Queen Rejected
-        } else if (frequencyHz > 320) {
-          // Mel Bands 13-27 (> 320 Hz): Queen Absent vs Queen Rejected
-          // High-frequency wing-click friction in Bands 46-75 (1000-2500 Hz) distinguishes Queen Rejected balling from Queen Absent roar
+        } else if (frequencyHz > 320 && frequencyHz < 500) {
+          // Genuine Mel Bands 13-27 (321-499 Hz) colony distress where 300-600 Hz energy exceeds 90-280 Hz:
           final bool hasBallingAgitation = (dbBands46to75 - dbBands13to27) > -15.0;
           calibratedWeights[0] *= 2.5 * (0.5 + presenceSoftmax[1]); // Queen Absent
           calibratedWeights[3] *= (hasBallingAgitation ? 2.6 : 1.6) * (0.5 + presenceSoftmax[1]); // Queen Rejected
@@ -254,9 +258,11 @@ class ModelService {
         } else {
           // Transitional band (261-320 Hz, Mel Bands 11-14): Queen Accepted piping vs Queen Rejected agitation
           calibratedWeights[1] *= 1.6 * (0.5 + presenceSoftmax[0]); // Queen Accepted
-          calibratedWeights[2] *= 1.2 * (0.5 + presenceSoftmax[0]); // Queen Present
-          calibratedWeights[3] *= 1.6 * (0.5 + presenceSoftmax[1]); // Queen Rejected
-          calibratedWeights[0] *= 1.2 * (0.5 + presenceSoftmax[1]); // Queen Absent
+          calibratedWeights[2] *= 1.4 * (0.5 + presenceSoftmax[0]); // Queen Present
+          if (!queenPresentBandDominates) {
+            calibratedWeights[3] *= 1.6 * (0.5 + presenceSoftmax[1]); // Queen Rejected
+            calibratedWeights[0] *= 1.2 * (0.5 + presenceSoftmax[1]); // Queen Absent
+          }
         }
       }
 

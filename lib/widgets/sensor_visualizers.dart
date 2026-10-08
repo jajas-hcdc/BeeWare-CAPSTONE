@@ -17,7 +17,7 @@ class TemperatureVisualizer extends StatelessWidget {
     super.key,
     required this.currentTemp,
     this.history = const [33.2, 33.6, 34.0, 34.4, 34.2, 34.5, 34.2],
-    this.minRange = 28.0,
+    this.minRange = 20.0,
     this.maxRange = 40.0,
     this.safeMin = 32.0,
     this.safeMax = 36.0,
@@ -26,7 +26,10 @@ class TemperatureVisualizer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isSafe = currentTemp >= safeMin && currentTemp <= safeMax;
-    final primaryColor = isSafe ? const Color(0xFFE65100) : Colors.red;
+    final isLowAlert = currentTemp <= 25.0;
+    final primaryColor = isLowAlert
+        ? const Color(0xFFD32F2F)
+        : (isSafe ? const Color(0xFFE65100) : const Color(0xFFF57C00));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -98,7 +101,7 @@ class TemperatureVisualizer extends StatelessWidget {
               const Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('30°', style: TextStyle(fontSize: 8, color: Colors.black45, fontWeight: FontWeight.bold)),
+                  Text('20°', style: TextStyle(fontSize: 8, color: Colors.black45, fontWeight: FontWeight.bold)),
                   Text('Optimal', style: TextStyle(fontSize: 8, color: AppColors.healthyGreen, fontWeight: FontWeight.bold)),
                   Text('40°', style: TextStyle(fontSize: 8, color: Colors.black45, fontWeight: FontWeight.bold)),
                 ],

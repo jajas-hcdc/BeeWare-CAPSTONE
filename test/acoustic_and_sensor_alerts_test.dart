@@ -668,5 +668,126 @@ void main() {
       expect(find.text('262 Hz • Offline'), findsOneWidget);
       expect(find.text('262 Hz • Active'), findsNothing);
     });
+
+    test('AlertService triggers Low Temperature Alert when hive temperature drops to 25.0°C or below and resolves when > 25.0°C', () async {
+      final triggeredTitles = <String>[];
+      final sub = alertService.onAlertTriggered.listen((a) => triggeredTitles.add(a.title));
+
+      hiveService.addHive(
+        HiveData(
+          id: 'hive_low_temp_test',
+          name: 'Hive Low Temp Test',
+          deviceId: 'BW-LOWTEMP-01',
+          conditionLabel: 'Queen Present',
+          confidence: 95,
+          healthScore: 95,
+          temperature: '34.5',
+          humidity: '60',
+          acoustic: '210 Hz',
+          acousticStatus: 'Normal',
+          updated: 'Just now',
+          wifiStatus: 'Connected',
+          isAlert: false,
+          alertLabel: 'Normal',
+          alertMessage: 'Active',
+        ),
+      );
+
+      // 1. Ingest telemetry at 25.0°C (at threshold)
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-LOWTEMP-01',
+          'temperature': 25.0,
+          'humidity': 60.0,
+          'frequency': 210,
+          'frequency_hz': 210,
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+
+      final lowAlert = alertService.alerts.where((a) => a.id == 'sensor_temp_low_hive_low_temp_test').toList();
+      expect(lowAlert, isNotEmpty);
+      expect(lowAlert.first.title, contains('Low Temperature Alert (25.0°C)'));
+      expect(lowAlert.first.severity, 'Critical');
+      expect(triggeredTitles.any((t) => t.contains('Low Temperature Alert')), isTrue);
+
+      // 2. Recover temperature to optimal 34.2°C -> alert resolves
+      triggeredTitles.clear();
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-LOWTEMP-01',
+          'temperature': 34.2,
+          'humidity': 60.0,
+          'frequency': 210,
+          'frequency_hz': 210,
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+      expect(alertService.alerts.any((a) => a.id == 'sensor_temp_low_hive_low_temp_test'), isFalse);
+
+      // 3. Drop temperature below 25.0°C (23.4°C) -> triggers again!
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-LOWTEMP-01',
+          'temperature': 23.4,
+          'humidity': 60.0,
+          'frequency': 210,
+          'frequency_hz': 210,
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+      expect(triggeredTitles.any((t) => t.contains('Low Temperature Alert (23.4°C)')), isTrue);
+
+      await sub.cancel();
+    });
+
+    test('500-1000 Hz cricket/rain spike does not trigger false Queen Absent alert on a healthy colony', () async {
+      final triggeredTitles = <String>[];
+      final sub = alertService.onAlertTriggered.listen((a) => triggeredTitles.add(a.title));
+
+      hiveService.addHive(
+        HiveData(
+          id: 'hive_rain_cricket_test',
+          name: 'Field Rain Cricket Hive',
+          deviceId: 'BW-FIELD-RAIN',
+          conditionLabel: 'Queen Present',
+          confidence: 95,
+          healthScore: 95,
+          temperature: '34.0',
+          humidity: '72',
+          acoustic: '215 Hz',
+          acousticStatus: 'Normal',
+          updated: 'Just now',
+          wifiStatus: 'Connected',
+          isAlert: false,
+          alertLabel: 'Queen Present',
+          alertMessage: 'Colony is queenright and stable.',
+        ),
+      );
+
+      // Simulate ESP32 sending a 680 Hz spike caused by crickets and rain with unverified "Queen Absent"
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-FIELD-RAIN',
+          'temperature': 34.0,
+          'humidity': 72.0,
+          'frequency': 680,
+          'frequency_hz': 680,
+          'conditionLabel': 'Queen Absent',
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+
+      final updated = hiveService.getHiveById('hive_rain_cricket_test')!;
+      expect(updated.conditionLabel, 'Queen Present');
+      expect(updated.isAlert, isFalse);
+      expect(triggeredTitles.any((t) => t.toLowerCase().contains('absent')), isFalse);
+
+      await sub.cancel();
+    });
   });
 }

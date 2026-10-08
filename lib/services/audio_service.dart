@@ -292,7 +292,9 @@ class AudioService extends ChangeNotifier {
             bytes = _addWavHeader(bytes, 16000, 1, 16);
           }
           wavBytes = bytes;
-          if (effectiveHz <= 0) {
+          // Always extract the true FFT honeybee fundamental (8-490 Hz) from the WAV clip when the ESP32
+          // reports <= 0 Hz OR >= 320 Hz (where crickets/rain average with the bee hum in zero-crossings)
+          if (effectiveHz <= 0 || effectiveHz >= 320) {
             final measuredHz = await AudioProcessor.computeDominantFrequencyHz(bytes);
             if (measuredHz > 0) {
               effectiveHz = measuredHz;

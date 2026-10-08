@@ -218,6 +218,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
     final isConnecting = _hive.conditionLabel.toLowerCase().contains('connect') || !hasRealTemp || !hasRealHum;
 
     final isTempNotDetected = (parsedTemp != null && parsedTemp <= 0.0) || _hive.temperature == '0.0' || _hive.temperature == '0';
+    final isLowTempAlert = !isTempNotDetected && hasRealTemp && parsedTemp != null && parsedTemp <= 25.0;
     final isHumNotDetected = (parsedHum != null && parsedHum <= 0.0) || _hive.humidity == '0.0' || _hive.humidity == '0';
     final acousticClean = _hive.acoustic.trim().toLowerCase();
     final isAcousticNotDetected = acousticClean == '0' ||
@@ -477,11 +478,13 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                         Text(
                           isTempNotDetected
                               ? '0.0°C (Not Detected)'
-                              : (_hive.temperature.contains('-') ? '--' : '${_hive.temperature}°C'),
+                              : (isLowTempAlert
+                                  ? '${_hive.temperature}°C (Low Temp!)'
+                                  : (_hive.temperature.contains('-') ? '--' : '${_hive.temperature}°C')),
                           style: TextStyle(
-                            fontSize: isTempNotDetected ? 13 : 15,
+                            fontSize: (isTempNotDetected || isLowTempAlert) ? 13 : 15,
                             fontWeight: FontWeight.w900,
-                            color: isTempNotDetected ? const Color(0xFFD32F2F) : Colors.black,
+                            color: (isTempNotDetected || isLowTempAlert) ? const Color(0xFFD32F2F) : Colors.black,
                           ),
                         ),
                       ],
@@ -618,6 +621,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
     final humVal = parsedHum ?? 64.0;
 
     final isTempNotDetected = (parsedTemp != null && parsedTemp <= 0.0) || _hive.temperature == '0.0' || _hive.temperature == '0';
+    final isLowTempAlert = !isTempNotDetected && parsedTemp != null && parsedTemp > 0.0 && parsedTemp <= 25.0;
     final isHumNotDetected = (parsedHum != null && parsedHum <= 0.0) || _hive.humidity == '0.0' || _hive.humidity == '0';
     final acousticClean = _hive.acoustic.trim().toLowerCase();
     final isAcousticNotDetected = acousticClean == '0' ||
@@ -695,25 +699,34 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                           children: [
                             const Icon(Icons.thermostat, size: 34, color: Color(0xFFE65100)),
                             const SizedBox(width: 8),
-                            Text(
-                              isTempNotDetected
-                                  ? '0.0°C (Not Detected)'
-                                  : (_hive.temperature.contains('-') ? '--' : '${_hive.temperature}°C'),
-                              style: TextStyle(
-                                fontSize: isTempNotDetected ? 18 : 22,
-                                fontWeight: FontWeight.w900,
-                                color: isTempNotDetected ? const Color(0xFFD32F2F) : Colors.black,
+                            Expanded(
+                              child: Text(
+                                isTempNotDetected
+                                    ? '0.0°C (Not Detected)'
+                                    : (isLowTempAlert
+                                        ? '${_hive.temperature}°C (Low Temp Alert)'
+                                        : (_hive.temperature.contains('-') ? '--' : '${_hive.temperature}°C')),
+                                style: TextStyle(
+                                  fontSize: (isTempNotDetected || isLowTempAlert) ? 16 : 22,
+                                  fontWeight: FontWeight.w900,
+                                  color: (isTempNotDetected || isLowTempAlert) ? const Color(0xFFD32F2F) : Colors.black,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          isTempNotDetected ? '⚠️ Check DHT22 Data Wire (GPIO 4)' : 'Normal Range: 30°C - 40°C',
+                          isTempNotDetected
+                              ? '⚠️ Check DHT22 Data Wire (GPIO 4)'
+                              : (isLowTempAlert
+                                  ? '❄️ Low Temp Alert (≤ 25.0°C) • Optimal: 32.0°C - 36.0°C'
+                                  : 'Optimal Range: 32.0°C - 36.0°C (Alert ≤ 25.0°C)'),
                           style: TextStyle(
                             fontSize: 11,
-                            color: isTempNotDetected ? const Color(0xFFD32F2F) : Colors.black54,
-                            fontWeight: isTempNotDetected ? FontWeight.w700 : FontWeight.w500,
+                            color: (isTempNotDetected || isLowTempAlert) ? const Color(0xFFD32F2F) : Colors.black54,
+                            fontWeight: (isTempNotDetected || isLowTempAlert) ? FontWeight.w700 : FontWeight.w500,
                           ),
                         ),
                       ],

@@ -126,8 +126,10 @@ class AudioProcessor {
 
     if (frameCount == 0) return 0;
 
+    // Search within the biological honeybee fundamental range (8 - 490 Hz)
+    // so external crickets/rain (500 - 1500+ Hz) do not overwrite the true colony Hz.
     final int minBin = max(1, (8.0 * _nFft / sampleRate).floor());
-    final int maxBin = min(nBins - 1, (1500.0 * _nFft / sampleRate).ceil());
+    final int maxBin = min(nBins - 1, (490.0 * _nFft / sampleRate).ceil());
     int bestBin = minBin;
     double bestPower = -1.0;
     for (int k = minBin; k <= maxBin; k++) {
@@ -137,8 +139,27 @@ class AudioProcessor {
       }
     }
 
+    // If the best bin landed in 320-490 Hz due to broadband rain splatter, check whether
+    // the 90-260 Hz Queen Present band has comparable or strong fundamental energy (>= 45% of peak power).
+    final int beePresentMinBin = max(minBin, (90.0 * _nFft / sampleRate).floor());
+    final int beePresentMaxBin = min(maxBin, (260.0 * _nFft / sampleRate).ceil());
+    final int rawHz = ((bestBin * sampleRate) / _nFft).round();
+    if (rawHz > 320 && beePresentMinBin <= beePresentMaxBin) {
+      int bestPresentBin = beePresentMinBin;
+      double bestPresentPower = -1.0;
+      for (int k = beePresentMinBin; k <= beePresentMaxBin; k++) {
+        if (avgPower[k] > bestPresentPower) {
+          bestPresentPower = avgPower[k];
+          bestPresentBin = k;
+        }
+      }
+      if (bestPresentPower >= bestPower * 0.45) {
+        bestBin = bestPresentBin;
+      }
+    }
+
     final int dominantHz = ((bestBin * sampleRate) / _nFft).round();
-    return dominantHz.clamp(1, 1500);
+    return dominantHz.clamp(1, 490);
   }
 
   // ── Core pipeline ───────────────────────────────────────────────────────

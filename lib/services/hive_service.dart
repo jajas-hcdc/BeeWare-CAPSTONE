@@ -794,6 +794,16 @@ class HiveService extends ChangeNotifier {
       } else if (hasAcoustic && freqHz >= 90 && freqHz <= 260) {
         // A frequency between 90 to 260 Hz (Mel Bands 4-12) combined with standard hive harmonics indicates Queen Present
         condLabel = 'Queen Present';
+      } else if (hasAcoustic && freqHz >= 500 && cachedAi == null) {
+        // Frequencies >= 500 Hz (500-1000+ Hz) are above the biological honeybee fundamental range (caused by crickets/rain).
+        // Do not let an unverified >= 500 Hz zero-crossing spike trigger a false Queen Absent alert.
+        if (existingIdx != -1 &&
+            !_hives[existingIdx].conditionLabel.toLowerCase().contains('absent') &&
+            !_hives[existingIdx].conditionLabel.toLowerCase().contains('no buzz')) {
+          condLabel = _hives[existingIdx].conditionLabel;
+        } else {
+          condLabel = 'Queen Present';
+        }
       }
       final conf = (!hasAcoustic || freqHz < 90)
           ? 50
@@ -1091,15 +1101,15 @@ class HiveService extends ChangeNotifier {
 
     double score = 100.0;
 
-    // 1. Brood nest temperature (Optimal: 32°C - 36°C)
+    // 1. Brood nest temperature (Optimal: 32.0°C - 36.0°C, Low Temp Alert: <= 25.0°C)
     if (temp >= 32.0 && temp <= 36.0) {
       // Optimal range
     } else if ((temp >= 30.0 && temp < 32.0) || (temp > 36.0 && temp <= 37.5)) {
       score -= 6.0; // Mild deviation
-    } else if ((temp >= 26.0 && temp < 30.0) || (temp > 37.5 && temp <= 39.0)) {
+    } else if ((temp > 25.0 && temp < 30.0) || (temp > 37.5 && temp <= 39.0)) {
       score -= 18.0; // Moderate thermal stress
     } else {
-      score -= 35.0; // Severe thermal stress
+      score -= 35.0; // Severe thermal stress / Low Temp Alert (<= 25.0°C or > 39.0°C)
     }
 
     // 2. Relative humidity (Optimal: 50% - 75%)
