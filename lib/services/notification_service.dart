@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/alerts_screen.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -172,7 +173,31 @@ class NotificationService {
     }
   }
 
-  /// Displays a native system pop-up notification (Heads-Up Banner on phone).
+  /// Cancels all active system push notifications in the device status bar / tray.
+  Future<void> cancelAllSystemNotifications() async {
+    if (_isTesting) return;
+    try {
+      await _notificationsPlugin.cancelAll();
+    } catch (e) {
+      debugPrint('Error cancelling system notifications: $e');
+    }
+  }
+
+  /// Immediately dismisses any visible in-app top anomaly banner.
+  void dismissInAppBanner() {
+    try {
+      if (_activeBannerEntry != null) {
+        if (_activeBannerEntry!.mounted) {
+          _activeBannerEntry!.remove();
+        }
+        _activeBannerEntry = null;
+      }
+    } catch (e) {
+      debugPrint('Error dismissing in-app banner: $e');
+    }
+  }
+
+  /// Displays a native system pop-up notification (Heads-Up Banner on phone) and/or in-app banner.
   /// Deduplicates by device and anomaly category so only ONE notification is sent per active anomaly.
   Future<void> showNotification({
     int? id,
@@ -180,12 +205,32 @@ class NotificationService {
     required String body,
     String? payload,
     String? severity,
+    bool? allowSystemPush,
+    bool? allowInAppBanner,
   }) async {
     final deviceKey = extractDeviceKey(payload: payload, title: title, body: body);
     final category = classifyAnomalyCategory(title, body);
     final now = DateTime.now();
 
+    bool canShowSystemPush = allowSystemPush ?? true;
+    bool canShowInAppBanner = allowInAppBanner ?? true;
+
     if (category != 'test_alert') {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final pushPref = prefs.getBool('beeware_push_notifications_enabled') ?? true;
+        final alertPref = prefs.getBool('beeware_alert_notifications_enabled') ?? true;
+        canShowSystemPush = (allowSystemPush ?? pushPref) && pushPref;
+        canShowInAppBanner = (allowInAppBanner ?? alertPref) && alertPref;
+      } catch (_) {}
+
+      if (!canShowSystemPush && !canShowInAppBanner) {
+        debugPrint(
+          '🔕 [BeeWare] Notification suppressed because Push & Alert notifications are disabled in settings: "$title"',
+        );
+        return;
+      }
+
       final previous = _lastNotifiedByDevice[deviceKey];
       if (previous != null && previous.category == category) {
         debugPrint(
@@ -197,64 +242,70 @@ class NotificationService {
     }
 
     if (_isTesting) {
-      _showInAppTopBanner(title, body, severity: severity);
+      if (canShowInAppBanner) {
+        _showInAppTopBanner(title, body, severity: severity);
+      }
       return;
     }
 
-    if (!_isInitialized) {
-      await initialize();
-    }
+    if (canShowSystemPush) {
+      if (!_isInitialized) {
+        await initialize();
+      }
 
-    // Use a deterministic notification ID per device & category so Android pops up
-    // a heads-up notification whenever a microphone disconnect or new anomaly occurs.
-    final int notifId = '${deviceKey}_$category'.hashCode & 0x7FFFFFFF;
-    final String notifTag = 'beeware_alert_${deviceKey}_$category';
+      // Use a deterministic notification ID per device & category so Android pops up
+      // a heads-up notification whenever a microphone disconnect or new anomaly occurs.
+      final int notifId = '${deviceKey}_$category'.hashCode & 0x7FFFFFFF;
+      final String notifTag = 'beeware_alert_${deviceKey}_$category';
 
-    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      channelId,
-      channelName,
-      channelDescription: channelDescription,
-      importance: Importance.max,
-      priority: Priority.high,
-      ticker: 'BeeWare Notification',
-      tag: notifTag,
-      icon: '@mipmap/ic_launcher',
-      playSound: true,
-      enableVibration: true,
-      onlyAlertOnce: false,
-      styleInformation: BigTextStyleInformation(
-        body,
-        contentTitle: title,
-        summaryText: 'BeeWare Smart Apiary',
-      ),
-    );
-
-    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-    );
-
-    final NotificationDetails notificationDetails = NotificationDetails(
-      android: androidDetails,
-      iOS: iosDetails,
-    );
-
-    try {
-      await _notificationsPlugin.show(
-        id: notifId,
-        title: title,
-        body: body,
-        notificationDetails: notificationDetails,
-        payload: payload ?? deviceKey,
+      final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+        channelId,
+        channelName,
+        channelDescription: channelDescription,
+        importance: Importance.max,
+        priority: Priority.high,
+        ticker: 'BeeWare Notification',
+        tag: notifTag,
+        icon: '@mipmap/ic_launcher',
+        playSound: true,
+        enableVibration: true,
+        onlyAlertOnce: false,
+        styleInformation: BigTextStyleInformation(
+          body,
+          contentTitle: title,
+          summaryText: 'BeeWare Smart Apiary',
+        ),
       );
-      debugPrint('🔔 [BeeWare] Pop-up notification posted ($deviceKey / $category): "$title" - "$body"');
-    } catch (e) {
-      debugPrint('❌ [BeeWare] Failed to show system notification: $e');
+
+      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+
+      final NotificationDetails notificationDetails = NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      );
+
+      try {
+        await _notificationsPlugin.show(
+          id: notifId,
+          title: title,
+          body: body,
+          notificationDetails: notificationDetails,
+          payload: payload ?? deviceKey,
+        );
+        debugPrint('🔔 [BeeWare] Pop-up notification posted ($deviceKey / $category): "$title" - "$body"');
+      } catch (e) {
+        debugPrint('❌ [BeeWare] Failed to show system notification: $e');
+      }
     }
 
-    // Also trigger in-app heads-up overlay banner if user is currently inside the app
-    _showInAppTopBanner(title, body, severity: severity);
+    // Trigger in-app heads-up overlay banner if Alert Notifications are enabled
+    if (canShowInAppBanner) {
+      _showInAppTopBanner(title, body, severity: severity);
+    }
   }
 
   /// Displays a notification when an IoT audio recording occurs (disabled to prevent intrusive prompts on app launch)

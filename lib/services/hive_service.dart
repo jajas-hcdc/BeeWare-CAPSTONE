@@ -22,7 +22,8 @@ class HiveService extends ChangeNotifier {
 
   List<HiveData> _hives = [];
   final Map<String, HiveData> _unpairedNodes = {};
-  final Map<String, ({int epoch, String conditionLabel, int confidence, String explanation})> _latestModelPredictions = {};
+  final Map<String, ({int epoch, String conditionLabel, int confidence, int frequencyHz, String? recordedTime, String explanation})> _latestModelPredictions = {};
+  final Set<String> _initialAudioSyncDone = {};
   StreamSubscription<QuerySnapshot>? _hivesSubscription;
   StreamSubscription? _authSubscription;
   Timer? _debounceTimer;
@@ -659,12 +660,12 @@ class HiveService extends ChangeNotifier {
       } else if (rawFreq is String) {
         freqHz = int.tryParse(rawFreq.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
       }
-      if (freqHz <= 0) {
-        final cachedPred = _latestModelPredictions[cleanDevId];
-        final hzMatch = cachedPred != null
-            ? RegExp(r'\((\d+)\s*Hz').firstMatch(cachedPred.explanation)
-            : null;
-        final cachedHz = hzMatch != null ? (int.tryParse(hzMatch.group(1)!) ?? 0) : 0;
+      final cachedPred = _latestModelPredictions[cleanDevId];
+      if (freqHz >= 90 && cachedPred != null && cachedPred.frequencyHz >= 90) {
+        // Prefer the verified TFLite audio clip frequency over unverified ESP32 zero-crossing spikes
+        freqHz = cachedPred.frequencyHz;
+      } else if (freqHz <= 0) {
+        final cachedHz = cachedPred?.frequencyHz ?? 0;
         if (cachedHz > 0) {
           freqHz = cachedHz;
         } else {
@@ -682,7 +683,12 @@ class HiveService extends ChangeNotifier {
           : (freqHz < 90 ? 'No Buzz ($freqHz Hz)' : 'Normal');
 
       // Extract last audio recording metadata
-      final lastAudioRecTime = (latest['last_audio_recorded_time'] ?? latest['lastAudioRecordedTime'])?.toString();
+      final rawLastAudioRecTime = (latest['last_audio_recorded_time'] ?? latest['lastAudioRecordedTime'])?.toString();
+      final String? lastAudioRecTime = (cachedPred?.recordedTime != null &&
+              cachedPred!.recordedTime!.isNotEmpty &&
+              freqHz == cachedPred.frequencyHz)
+          ? cachedPred.recordedTime
+          : rawLastAudioRecTime;
       final lastAudioTrig = (latest['last_audio_trigger'] ?? latest['lastAudioTrigger'])?.toString();
       final lastAudioEpoch = parseNumToInt(latest['last_audio_epoch'] ?? latest['last_audio_created_at'], 0);
 
@@ -758,8 +764,8 @@ class HiveService extends ChangeNotifier {
             isNodeActivelyTransmitting = true;
           } else {
             computedWifiStatus = 'Offline';
-            computedUpdated = (lastAudioRecTime != null && lastAudioRecTime.isNotEmpty && lastAudioRecTime != 'null')
-                ? lastAudioRecTime
+            computedUpdated = (rawLastAudioRecTime != null && rawLastAudioRecTime.isNotEmpty && rawLastAudioRecTime != 'null')
+                ? rawLastAudioRecTime
                 : 'Offline';
             isNodeActivelyTransmitting = false;
           }
@@ -874,13 +880,14 @@ class HiveService extends ChangeNotifier {
         );
         hasChanged = true;
 
-        if (isNodeActivelyTransmitting &&
-            lastAudioRecTime != null &&
-            lastAudioRecTime.isNotEmpty &&
-            lastAudioRecTime != 'null') {
+        final bool shouldSyncAudio = isNodeActivelyTransmitting || _initialAudioSyncDone.add(cleanDevId);
+        if (shouldSyncAudio &&
+            rawLastAudioRecTime != null &&
+            rawLastAudioRecTime.isNotEmpty &&
+            rawLastAudioRecTime != 'null') {
           AudioService().syncFromTelemetry(
             deviceId: deviceId,
-            recordedTime: lastAudioRecTime,
+            recordedTime: rawLastAudioRecTime,
             trigger: lastAudioTrig ?? 'Device Restart',
             epoch: telemetryEpoch > 0 ? telemetryEpoch : lastAudioEpoch,
             temperature: temp,
@@ -991,6 +998,7 @@ class HiveService extends ChangeNotifier {
     required String prediction,
     required int confidence,
     required int frequencyHz,
+    String? recordedTime,
   }) {
     if (frequencyHz <= 0) return;
     final cleanDevId = deviceId.trim().toUpperCase();
@@ -1006,6 +1014,8 @@ class HiveService extends ChangeNotifier {
       epoch: recordingEpoch,
       conditionLabel: effectivePred,
       confidence: confidence,
+      frequencyHz: frequencyHz,
+      recordedTime: recordedTime,
       explanation: explanationText,
     );
 
@@ -1058,6 +1068,9 @@ class HiveService extends ChangeNotifier {
                   ? 'Queen accepted. Avoid disturbing brood box for 5 days while egg laying stabilizes.'
                   : 'Colony is queenright and stable. Continue regular monitoring.')),
       detectedBy: 'BeeWare CNN TFLite Model & INMP441',
+      lastAudioRecordedTime: (recordedTime != null && recordedTime.isNotEmpty)
+          ? recordedTime
+          : existing.lastAudioRecordedTime,
     );
 
     _saveToCache();

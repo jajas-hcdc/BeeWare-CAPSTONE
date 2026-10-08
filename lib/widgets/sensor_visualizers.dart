@@ -417,12 +417,14 @@ class AcousticSignalVisualizer extends StatelessWidget {
   final String conditionLabel;
   final String acousticStatus;
   final String? acoustic;
+  final bool isOffline;
 
   const AcousticSignalVisualizer({
     super.key,
     required this.conditionLabel,
     this.acousticStatus = 'Normal',
     this.acoustic,
+    this.isOffline = false,
   });
 
   @override
@@ -485,7 +487,7 @@ class AcousticSignalVisualizer extends StatelessWidget {
           : '$parsedHz Hz';
       readoutText = '$hzLabel • No Buzz';
     } else if (acoustic != null && acoustic!.toLowerCase().contains('hz')) {
-      readoutText = '${acoustic!.trim()} • Active';
+      readoutText = '${acoustic!.trim()} • ${isOffline ? 'Offline' : 'Active'}';
     } else {
       final condition = conditionLabel.toLowerCase();
       readoutText = condition.contains('absent')

@@ -315,6 +315,7 @@ class AudioService extends ChangeNotifier {
             prediction: 'No Buzz Detected',
             confidence: 60,
             frequencyHz: effectiveHz,
+            recordedTime: latest.formattedRecordedTime,
           );
         }
       } else if (wavBytes != null) {
@@ -323,6 +324,14 @@ class AudioService extends ChangeNotifier {
           trimmed[0] = latest.copyWith(
             frequency: effectiveHz,
             condition: prevInferred.condition,
+          );
+          HiveService().applyAiModelPrediction(
+            deviceId: cleanId,
+            recordingEpoch: latest.createdAt,
+            prediction: prevInferred.condition,
+            confidence: prevInferred.confidence,
+            frequencyHz: effectiveHz,
+            recordedTime: latest.formattedRecordedTime,
           );
         } else {
           try {
@@ -349,12 +358,39 @@ class AudioService extends ChangeNotifier {
                 prediction: predLabel,
                 confidence: confPct,
                 frequencyHz: effectiveHz,
+                recordedTime: latest.formattedRecordedTime,
+              );
+            } else {
+              HiveService().applyAiModelPrediction(
+                deviceId: cleanId,
+                recordingEpoch: latest.createdAt,
+                prediction: latest.condition,
+                confidence: 92,
+                frequencyHz: effectiveHz,
+                recordedTime: latest.formattedRecordedTime,
               );
             }
           } catch (e) {
             debugPrint('ℹ️ ESP32 audio TFLite inference skipped: $e');
+            HiveService().applyAiModelPrediction(
+              deviceId: cleanId,
+              recordingEpoch: latest.createdAt,
+              prediction: latest.condition,
+              confidence: 92,
+              frequencyHz: effectiveHz,
+              recordedTime: latest.formattedRecordedTime,
+            );
           }
         }
+      } else if (effectiveHz >= 90) {
+        HiveService().applyAiModelPrediction(
+          deviceId: cleanId,
+          recordingEpoch: latest.createdAt,
+          prediction: latest.condition,
+          confidence: 92,
+          frequencyHz: effectiveHz,
+          recordedTime: latest.formattedRecordedTime,
+        );
       }
     }
 

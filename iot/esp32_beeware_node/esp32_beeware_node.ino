@@ -1,27 +1,49 @@
 /*
  * =========================================================================================
- *  BeeWare ESP32 Firmware 🐝 - Real-Time Audio Streaming + DHT Sensor (Cloud Node)
+ *  BeeWare ESP32 Firmware v2.0.0 🐝 - 24/7 Cloud Node + Remote HTTP OTA + I2S & DHT22
  *  Hardware: ESP32 + INMP441 (I2S Microphone) + DHT22 Temperature & Humidity Sensor
+ *
+ *  What's New in v2.0.0:
+ *  1. Cloud OTA Firmware Updater (Firebase RTDB + GitHub/HTTPS .bin download via HTTPUpdate)
+ *     - Checks /ota/<DEVICE_ID>.json every 5-minute cycle & on boot.
+ *     - When a newer "version" and "url" are present in Firebase, downloads the .bin,
+ *       flashes itself over Wi-Fi from anywhere, and reboots automatically.
+ *  2. Hardware Watchdog Timer (esp_task_wdt, 60s timeout)
+ *     - Automatically recovers and reboots the ESP32 if Wi-Fi/SSL ever hangs 24/7.
+ *  3. Self-Healing Wi-Fi + NTP Re-Sync
+ *     - Automatically reconnects before every 5-minute cycle without wearing out NVS flash.
+ *  4. 4 KB Buffered TLS Audio Streaming + Auto-Retry + Low-Pass Acoustic Filter
+ *     - Reduces TLS packet count by 8x so 3.0s WAV uploads to /audio_history never drop
+ *       on weak field Wi-Fi, and filters out false high-frequency zero-crossing spikes.
+ *  5. Bounded 20-Slot Ring Buffer for /telemetry_history
+ *     - Prevents Firebase Realtime Database storage from ever filling up during 24/7 operation.
  * =========================================================================================
  */
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
 #include <driver/i2s_std.h>
 #include <DHT.h>
 #include <time.h>
+#include <esp_task_wdt.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
-// ======================== CONFIGURATION ========================
+// ======================== FIRMWARE VERSION ========================
+#define FIRMWARE_VERSION    "2.0.0"
+
+// ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "ALHN-4EE8";
 const char* WIFI_PASSWORD = "kG7vWpfzq3";
 
 // Firebase Realtime Database (Singapore)
 const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebasedatabase.app";
 
-// Cooldown & Audio Recording Settings
+// Cooldown, Watchdog & Audio Recording Settings
 #define COOLDOWN_SECONDS    300       // 300 seconds cooldown (5 minutes)
+#define WDT_TIMEOUT_SECONDS 60        // 60 seconds hardware watchdog timeout
 #define RECORD_TIME_SECONDS 3.0       // 3.0 seconds audio
 #define SAMPLE_RATE         16000     // 16kHz studio sample rate
 #define VOLUME_GAIN         4         // Digital gain boost
@@ -41,8 +63,28 @@ const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebase
 DHT dht(DHTPIN, DHTTYPE);
 i2s_chan_handle_t rx_handle = NULL;
 RTC_DATA_ATTR int audioSlotCounter = 0;
+RTC_DATA_ATTR int historySlotCounter = 0;
 uint32_t cooldownStartTime = 0;
 uint32_t lastCooldownLogSec = 0;
+
+// ======================== WATCHDOG HELPER ========================
+void initWatchdog() {
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  esp_task_wdt_config_t twdt_config = {
+    .timeout_ms = WDT_TIMEOUT_SECONDS * 1000,
+    .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
+    .trigger_panic = true
+  };
+  esp_task_wdt_reconfigure(&twdt_config);
+#else
+  esp_task_wdt_init(WDT_TIMEOUT_SECONDS, true);
+#endif
+  esp_task_wdt_add(NULL);
+}
+
+inline void feedWatchdog() {
+  esp_task_wdt_reset();
+}
 
 // ======================== DEVICE ID FROM MAC ========================
 // Permanent unique ID like "BW-A1B2C3" from hardware MAC address
@@ -135,7 +177,7 @@ void stopI2S() {
 // ======================== BATTERY CALCULATION ========================
 int readBatteryPercentage() {
   int raw = analogRead(BATTERY_PIN);
-  float voltage = (raw / 4095.0) * 3.3 * 2.0; 
+  float voltage = (raw / 4095.0) * 3.3 * 2.0;
   int percentage = (int)(((voltage - 3.2) / (4.2 - 3.2)) * 100);
   int clamped = constrain(percentage, 0, 100);
   return clamped == 0 ? 100 : clamped; // Default to 100% when plugged into outlet
@@ -144,6 +186,7 @@ int readBatteryPercentage() {
 // ======================== DHT SENSOR READING ========================
 void readDHTSensor(float &temp, float &hum) {
   for (int attempt = 1; attempt <= 3; attempt++) {
+    feedWatchdog();
     float t = dht.readTemperature();
     float h = dht.readHumidity();
 
@@ -171,13 +214,15 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
   size_t samplesReadTotal = 0;
   uint32_t startMs = millis();
 
-  const int32_t NOISE_THRESHOLD = 45;
+  const int32_t NOISE_THRESHOLD = 55;
   int zeroCrossings = 0;
   int prevSign = 0;
   int32_t dcEstimate = 0;
+  int32_t lowPassSample = 0;
   bool dcInitialized = false;
 
   while (samplesReadTotal < totalSamplesToMeasure && (millis() - startMs < 3000)) {
+    feedWatchdog();
     size_t toRead = min(CHUNK_SAMPLES, totalSamplesToMeasure - samplesReadTotal);
     size_t bytesRead = 0;
     esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, toRead * sizeof(int32_t), &bytesRead, 100);
@@ -187,15 +232,19 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
         int32_t rawShifted = (chunkRaw[i] >> 14);
         if (!dcInitialized) {
           dcEstimate = rawShifted;
+          lowPassSample = 0;
           dcInitialized = true;
         } else {
           dcEstimate = (dcEstimate * 63 + rawShifted) / 64;
         }
         int32_t sample = (rawShifted - dcEstimate) * VOLUME_GAIN;
-        int32_t absSample = abs(sample);
+        // First-order low-pass filter to suppress high-frequency electrical/ambient spikes (>800 Hz)
+        lowPassSample = (lowPassSample * 3 + sample) / 4;
+
+        int32_t absSample = abs(lowPassSample);
         if (absSample > peakVal) peakVal = absSample;
 
-        int sign = sample > NOISE_THRESHOLD ? 1 : (sample < -NOISE_THRESHOLD ? -1 : 0);
+        int sign = lowPassSample > NOISE_THRESHOLD ? 1 : (lowPassSample < -NOISE_THRESHOLD ? -1 : 0);
         if (sign != 0 && prevSign != 0 && sign != prevSign) zeroCrossings++;
         if (sign != 0) prevSign = sign;
       }
@@ -215,8 +264,10 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
 }
 
 // ======================== SEND TELEMETRY TO FIREBASE ========================
-void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32_t peakVal, int freqHz, const char* triggerType) {
-  delay(300);
+void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32_t peakVal, int freqHz,
+                             const char* triggerType, const String &timeStr, const String &dateStr, uint64_t epochMs) {
+  feedWatchdog();
+  delay(250);
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(10);
@@ -247,11 +298,12 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
 
   String macStr = WiFi.macAddress();
   String qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%7B%22deviceId%22%3A%22" + deviceId + "%22%2C%22mac%22%3A%22" + macStr + "%22%7D";
-  String timeStr = getFormattedTime();
 
   String payload = "{";
+  payload.reserve(900);
   payload += "\"device_id\":\"" + deviceId + "\",";
   payload += "\"deviceId\":\"" + deviceId + "\",";
+  payload += "\"firmware_version\":\"" + String(FIRMWARE_VERSION) + "\",";
   payload += "\"mac\":\"" + macStr + "\",";
   payload += "\"qr_code_url\":\"" + qrUrl + "\",";
   payload += "\"qr_url\":\"" + qrUrl + "\",";
@@ -274,10 +326,10 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
   payload += "\"acoustic_detected\":" + String(freqHz > 0 ? "true" : "false") + ",";
   payload += "\"last_audio_recorded_time\":\"" + timeStr + "\",";
   payload += "\"last_audio_trigger\":\"" + String(triggerType) + "\",";
-  payload += "\"last_audio_epoch\":" + String(getEpochMillis()) + ",";
-  payload += "\"epoch\":" + String(getEpochMillis()) + ",";
-  payload += "\"created_at\":" + String(getEpochMillis()) + ",";
-  payload += "\"recorded_date\":\"" + getFormattedDate() + "\",";
+  payload += "\"last_audio_epoch\":" + String(epochMs) + ",";
+  payload += "\"epoch\":" + String(epochMs) + ",";
+  payload += "\"created_at\":" + String(epochMs) + ",";
+  payload += "\"recorded_date\":\"" + dateStr + "\",";
   payload += "\"status\":\"online\",";
   payload += "\"timestamp\":\"" + timeStr + "\"";
   payload += "}";
@@ -286,27 +338,43 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
   client.print("Host: " + String(FIREBASE_HOST) + "\r\n");
   client.print("Content-Type: application/json\r\n");
   client.print("Content-Length: " + String(payload.length()) + "\r\n");
-  client.print("Connection: close\r\n\r\n");
+  client.print("Connection: keep-alive\r\n\r\n");
   client.print(payload);
 
   uint32_t respStart = millis();
-  while (client.connected() && !client.available() && (millis() - respStart < 4000)) delay(10);
+  while (client.connected() && !client.available() && (millis() - respStart < 4000)) {
+    feedWatchdog();
+    delay(10);
+  }
   if (client.available()) {
     String status = client.readStringUntil('\n');
     status.trim();
     Serial.println("✅ [Firebase RTDB] Telemetry updated: " + status);
+    // Drain remaining HTTP response headers/body so keep-alive socket is clean
+    uint32_t drainStart = millis();
+    while (client.available() && (millis() - drainStart < 500)) {
+      client.read();
+    }
   }
-  client.stop();
 
-  // Also append to telemetry_history for charts
-  delay(200);
-  if (client.connect(FIREBASE_HOST, 443)) {
+  // Write to bounded 20-slot ring buffer in /telemetry_history (reusing TLS connection if still open)
+  feedWatchdog();
+  if (!client.connected()) {
+    client.connect(FIREBASE_HOST, 443);
+  }
+  if (client.connected()) {
+    int histSlot = historySlotCounter % 20;
+    historySlotCounter = (historySlotCounter + 1) % 20;
+    char slotKey[12];
+    snprintf(slotKey, sizeof(slotKey), "slot_%02d", histSlot);
+
     String histPayload = "{\"temperature\":" + String(temp, 1) +
                          ",\"humidity\":" + String(hum, 1) +
                          ",\"battery_level\":" + String(battery) +
                          ",\"frequency\":" + String(freqHz) +
-                         ",\"timestamp\":\"Now\"}";
-    client.print("POST /telemetry_history/" + deviceId + ".json HTTP/1.1\r\n");
+                         ",\"epoch\":" + String(epochMs) +
+                         ",\"timestamp\":\"" + timeStr + "\"}";
+    client.print("PUT /telemetry_history/" + deviceId + "/" + String(slotKey) + ".json HTTP/1.1\r\n");
     client.print("Host: " + String(FIREBASE_HOST) + "\r\n");
     client.print("Content-Type: application/json\r\n");
     client.print("Content-Length: " + String(histPayload.length()) + "\r\n");
@@ -317,17 +385,13 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
 }
 
 // ======================== UPLOAD 3-SEC AUDIO TO FIREBASE ========================
-void uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const char* triggerType) {
-  if (WiFi.status() != WL_CONNECTED) return;
+bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const char* triggerType,
+                                    const String &timeStr, const String &dateStr, uint64_t epochMs) {
+  if (WiFi.status() != WL_CONNECTED) return false;
 
   int slot = audioSlotCounter % 5;
-  audioSlotCounter = (audioSlotCounter + 1) % 5;
-
   String deviceId = getDeviceId();
   String condition = freqHz > 320 ? "Queen Absent" : (freqHz >= 90 ? "Queen Present" : "No Buzz Detected");
-  String timeStr = getFormattedTime();
-  String dateStr = getFormattedDate();
-  uint64_t epochMs = getEpochMillis();
 
   size_t totalSamples = (size_t)(SAMPLE_RATE * RECORD_TIME_SECONDS);
   size_t totalB64Chars = (totalSamples * sizeof(int16_t) * 4) / 3;
@@ -350,107 +414,257 @@ void uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
   String jsonFoot = "\"}";
   size_t contentLength = jsonHead.length() + totalB64Chars + jsonFoot.length();
 
-  Serial.printf("☁️ [Audio Upload] [%s] Time: %s | Uploading 3.0s recording to slot %d...\n",
-                triggerType, timeStr.c_str(), slot);
+  // Buffer 1,536 samples (3,072 bytes PCM -> 4,096 Base64 chars) per TLS write for 8x faster upload
+  static const size_t READ_SAMPLES = 192;
+  static const size_t BATCH_SAMPLES = 1536; // Must be a multiple of 3 bytes (3072 bytes = 1024 Base64 triples)
+  static int32_t chunkRaw[READ_SAMPLES];
+  static int16_t batchPcm[BATCH_SAMPLES];
+  static char b64Batch[(BATCH_SAMPLES * sizeof(int16_t) * 4) / 3 + 4];
 
+  for (int attempt = 1; attempt <= 2; attempt++) {
+    feedWatchdog();
+    Serial.printf("☁️ [Audio Upload] [%s] Time: %s | Uploading 3.0s recording to slot %d (Attempt %d/2)...\n",
+                  triggerType, timeStr.c_str(), slot, attempt);
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(15);
+
+    if (!client.connect(FIREBASE_HOST, 443)) {
+      Serial.println("❌ [Audio Upload] TLS connection failed!");
+      delay(400);
+      continue;
+    }
+
+    client.print("PUT /audio_history/" + deviceId + "/slot_" + String(slot) + ".json HTTP/1.1\r\n");
+    client.print("Host: " + String(FIREBASE_HOST) + "\r\n");
+    client.print("Content-Type: application/json\r\n");
+    client.print("Content-Length: " + String(contentLength) + "\r\n");
+    client.print("Connection: close\r\n\r\n");
+    client.print(jsonHead);
+
+    if (rx_handle != NULL) {
+      i2s_channel_disable(rx_handle);
+      delay(10);
+      i2s_channel_enable(rx_handle);
+    }
+
+    size_t samplesRecorded = 0;
+    size_t batchCount = 0;
+    uint32_t startMs = millis();
+    uint32_t timeoutMs = (uint32_t)(RECORD_TIME_SECONDS * 1000) + 4500;
+
+    while (samplesRecorded < totalSamples && (millis() - startMs < timeoutMs)) {
+      feedWatchdog();
+      size_t remainingTotal = totalSamples - samplesRecorded;
+      size_t remainingInBatch = BATCH_SAMPLES - batchCount;
+      size_t samplesToRead = min(READ_SAMPLES, min(remainingTotal, remainingInBatch));
+      size_t bytesRead = 0;
+      esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, samplesToRead * sizeof(int32_t), &bytesRead, 100);
+      if (err == ESP_OK && bytesRead > 0) {
+        size_t readSamples = bytesRead / sizeof(int32_t);
+        for (size_t i = 0; i < readSamples; i++) {
+          int32_t sample = (chunkRaw[i] >> 14) * VOLUME_GAIN;
+          if (sample > 32767) sample = 32767;
+          if (sample < -32768) sample = -32768;
+          batchPcm[batchCount++] = (int16_t)sample;
+        }
+        samplesRecorded += readSamples;
+
+        if (batchCount == BATCH_SAMPLES || samplesRecorded == totalSamples) {
+          encodeChunkToBase64((const uint8_t*)batchPcm, batchCount * sizeof(int16_t), b64Batch);
+          size_t b64Len = (batchCount * sizeof(int16_t) * 4) / 3;
+          client.write((const uint8_t*)b64Batch, b64Len);
+          batchCount = 0;
+        }
+      }
+    }
+
+    // Pad any remaining samples with silence if I2S read timed out early
+    while (samplesRecorded < totalSamples) {
+      feedWatchdog();
+      size_t remaining = min(BATCH_SAMPLES - batchCount, totalSamples - samplesRecorded);
+      memset(&batchPcm[batchCount], 0, remaining * sizeof(int16_t));
+      batchCount += remaining;
+      samplesRecorded += remaining;
+
+      encodeChunkToBase64((const uint8_t*)batchPcm, batchCount * sizeof(int16_t), b64Batch);
+      size_t b64Len = (batchCount * sizeof(int16_t) * 4) / 3;
+      client.write((const uint8_t*)b64Batch, b64Len);
+      batchCount = 0;
+    }
+
+    client.print(jsonFoot);
+    client.flush();
+
+    // Wait for Firebase RTDB HTTP 200 acknowledgment before closing socket
+    uint32_t respStart = millis();
+    while (client.connected() && !client.available() && (millis() - respStart < 7000)) {
+      feedWatchdog();
+      delay(15);
+    }
+
+    bool uploadOk = false;
+    if (client.available()) {
+      String status = client.readStringUntil('\n');
+      status.trim();
+      Serial.println("✅ [Firebase RTDB Audio] Response: " + status);
+      uploadOk = (status.indexOf("200") >= 0);
+    }
+    client.stop();
+
+    if (uploadOk) {
+      audioSlotCounter = (audioSlotCounter + 1) % 5;
+      return true;
+    }
+    Serial.println("⚠️ [Audio Upload] Upload did not receive HTTP 200. Retrying...");
+    delay(500);
+  }
+
+  return false;
+}
+
+// ======================== CLOUD OTA FIRMWARE UPDATER ========================
+// Extracts a string field value from a flat JSON object, e.g. "version":"2.0.1"
+String extractJsonString(const String &json, const char* key) {
+  String pattern = "\"" + String(key) + "\"";
+  int keyIdx = json.indexOf(pattern);
+  if (keyIdx < 0) return "";
+  int colonIdx = json.indexOf(':', keyIdx + pattern.length());
+  if (colonIdx < 0) return "";
+  int firstQuote = json.indexOf('"', colonIdx + 1);
+  if (firstQuote < 0) return "";
+  int secondQuote = json.indexOf('"', firstQuote + 1);
+  if (secondQuote < 0) return "";
+  return json.substring(firstQuote + 1, secondQuote);
+}
+
+void reportOtaStatus(const String &deviceId, const char* state, const String &targetVer) {
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(15000);
-
-  if (!client.connect(FIREBASE_HOST, 443)) {
-    Serial.println("❌ [Audio Upload] Connection failed!");
-    return;
+  client.setTimeout(8);
+  if (client.connect(FIREBASE_HOST, 443)) {
+    String body = "{\"state\":\"" + String(state) +
+                  "\",\"current_version\":\"" + String(FIRMWARE_VERSION) +
+                  "\",\"target_version\":\"" + targetVer +
+                  "\",\"updated_at\":\"" + getFormattedTime() + "\"}";
+    client.print("PUT /ota/" + deviceId + "/status.json HTTP/1.1\r\n");
+    client.print("Host: " + String(FIREBASE_HOST) + "\r\n");
+    client.print("Content-Type: application/json\r\n");
+    client.print("Content-Length: " + String(body.length()) + "\r\n");
+    client.print("Connection: close\r\n\r\n");
+    client.print(body);
+    client.stop();
   }
+}
 
-  client.print("PUT /audio_history/" + deviceId + "/slot_" + String(slot) + ".json HTTP/1.1\r\n");
-  client.print("Host: " + String(FIREBASE_HOST) + "\r\n");
-  client.print("Content-Type: application/json\r\n");
-  client.print("Content-Length: " + String(contentLength) + "\r\n");
-  client.print("Connection: close\r\n\r\n");
-  client.print(jsonHead);
+void checkForFirmwareOTA() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  feedWatchdog();
 
-  const size_t CHUNK_SAMPLES = 192;
-  int32_t chunkRaw[CHUNK_SAMPLES];
-  int16_t chunkPcm[CHUNK_SAMPLES];
-  char b64Chunk[513];
+  String deviceId = getDeviceId();
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(8);
 
-  size_t samplesRecorded = 0;
-  uint32_t startMs = millis();
-  uint32_t timeoutMs = (uint32_t)(RECORD_TIME_SECONDS * 1000) + 3500;
+  HTTPClient https;
+  https.setTimeout(5000);
+  String otaConfigUrl = "https://" + String(FIREBASE_HOST) + "/ota/" + deviceId + ".json";
+  String payload = "";
 
-  if (rx_handle != NULL) {
-    i2s_channel_disable(rx_handle);
-    delay(10);
-    i2s_channel_enable(rx_handle);
-  }
-
-  while (samplesRecorded < totalSamples && (millis() - startMs < timeoutMs)) {
-    size_t samplesToRead = min(CHUNK_SAMPLES, totalSamples - samplesRecorded);
-    size_t bytesRead = 0;
-    esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, samplesToRead * sizeof(int32_t), &bytesRead, 100);
-    if (err == ESP_OK && bytesRead > 0) {
-      size_t readSamples = bytesRead / sizeof(int32_t);
-      for (size_t i = 0; i < readSamples; i++) {
-        int32_t sample = (chunkRaw[i] >> 14) * VOLUME_GAIN;
-        if (sample > 32767) sample = 32767;
-        if (sample < -32768) sample = -32768;
-        chunkPcm[i] = (int16_t)sample;
-      }
-      encodeChunkToBase64((uint8_t*)chunkPcm, readSamples * sizeof(int16_t), b64Chunk);
-      size_t chunkB64Len = (readSamples * sizeof(int16_t) * 4) / 3;
-      client.write((const uint8_t*)b64Chunk, chunkB64Len);
-      samplesRecorded += readSamples;
+  if (https.begin(client, otaConfigUrl)) {
+    int httpCode = https.GET();
+    if (httpCode == HTTP_CODE_OK) {
+      payload = https.getString();
     }
+    https.end();
   }
 
-  while (samplesRecorded < totalSamples) {
-    size_t remaining = min((size_t)CHUNK_SAMPLES, totalSamples - samplesRecorded);
-    memset(chunkPcm, 0, sizeof(chunkPcm));
-    encodeChunkToBase64((uint8_t*)chunkPcm, remaining * sizeof(int16_t), b64Chunk);
-    size_t chunkB64Len = (remaining * sizeof(int16_t) * 4) / 3;
-    client.write((const uint8_t*)b64Chunk, chunkB64Len);
-    samplesRecorded += remaining;
-  }
+  if (payload.isEmpty() || payload == "null") return;
 
-  client.print(jsonFoot);
-  client.flush();
+  String targetVersion = extractJsonString(payload, "version");
+  String firmwareUrl   = extractJsonString(payload, "url");
 
-  // Wait for Firebase RTDB HTTP acknowledgment before closing socket
-  uint32_t respStart = millis();
-  while (client.connected() && !client.available() && (millis() - respStart < 6000)) {
-    delay(15);
+  if (targetVersion.isEmpty() || firmwareUrl.isEmpty()) return;
+  if (targetVersion == String(FIRMWARE_VERSION)) return;
+  if (!firmwareUrl.startsWith("http")) return;
+
+  Serial.printf("🚀 [Cloud OTA] New firmware available! Current: %s -> Target: %s\n",
+                FIRMWARE_VERSION, targetVersion.c_str());
+  Serial.printf("🌐 [Cloud OTA] Downloading from: %s\n", firmwareUrl.c_str());
+
+  stopI2S();
+  reportOtaStatus(deviceId, "downloading", targetVersion);
+
+  // Detach task from WDT during flash write so multi-second flash erase doesn't trigger reset
+  esp_task_wdt_delete(NULL);
+
+  WiFiClientSecure otaClient;
+  otaClient.setInsecure();
+  otaClient.setTimeout(30);
+
+  httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  httpUpdate.rebootOnUpdate(false);
+
+  t_httpUpdate_return ret = httpUpdate.update(otaClient, firmwareUrl);
+
+  switch (ret) {
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("❌ [Cloud OTA] Update failed (%d): %s\n",
+                    httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+      esp_task_wdt_add(NULL);
+      reportOtaStatus(deviceId, "failed", targetVersion);
+      break;
+
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("ℹ️ [Cloud OTA] No update needed.");
+      esp_task_wdt_add(NULL);
+      break;
+
+    case HTTP_UPDATE_OK:
+      Serial.println("✅ [Cloud OTA] Firmware flashed successfully! Rebooting into v" + targetVersion + "...");
+      reportOtaStatus(deviceId, "installed", targetVersion);
+      delay(500);
+      ESP.restart();
+      break;
   }
-  if (client.available()) {
-    String status = client.readStringUntil('\n');
-    status.trim();
-    Serial.println("✅ [Firebase RTDB Audio] Slot uploaded: " + status);
-  } else {
-    Serial.printf("✅ [Audio Upload] [%s] Slot %d stream sent (%d samples)\n",
-                  triggerType, slot, samplesRecorded);
-  }
-  client.stop();
 }
 
 // ======================== WI-FI CONNECTION HELPER ========================
 void ensureWiFiConnected() {
-  if (WiFi.status() == WL_CONNECTED) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    // Re-sync NTP clock if time is not yet valid
+    if (time(nullptr) < 1700000000) {
+      configTime(8 * 3600, 0, "pool.ntp.org", "time.google.com");
+    }
+    return;
+  }
+
   Serial.printf("📶 Connecting to Wi-Fi: %s ", WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(false);
+  delay(100);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 25) {
+    feedWatchdog();
     delay(500);
     Serial.print(".");
     attempts++;
   }
+
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("\n✅ Wi-Fi Connected! IP: %s | RSSI: %d dBm\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
     // Synchronize Real Time via NTP (GMT+8)
     configTime(8 * 3600, 0, "pool.ntp.org", "time.google.com");
-    // Wait up to 3.5 seconds for NTP clock sync
     time_t nowSec = time(nullptr);
     uint32_t ntpWaitStart = millis();
     while (nowSec < 1700000000 && (millis() - ntpWaitStart < 3500)) {
+      feedWatchdog();
       delay(100);
       nowSec = time(nullptr);
     }
@@ -458,24 +672,31 @@ void ensureWiFiConnected() {
       Serial.printf("⏰ NTP Synchronized! Current time: %s\n", getFormattedTime().c_str());
     }
   } else {
-    Serial.println("\n❌ Wi-Fi Connection Timeout!");
+    Serial.println("\n❌ Wi-Fi Connection Timeout! Will retry on next cycle.");
   }
 }
 
 // ======================== SAMPLING & TELEMETRY CYCLE ========================
 void executeAudioRecordingCycle(const char* triggerType) {
-  Serial.printf("\n🐝 --- BEEWARE SAMPLING CYCLE [%s] (Trigger: %s) ---\n",
-                getDeviceId().c_str(), triggerType);
+  feedWatchdog();
+  Serial.printf("\n🐝 --- BEEWARE SAMPLING CYCLE [%s | v%s] (Trigger: %s) ---\n",
+                getDeviceId().c_str(), FIRMWARE_VERSION, triggerType);
 
   ensureWiFiConnected();
+
+  // Check if a remote Over-The-Air (OTA) firmware update is waiting in Firebase RTDB
+  if (WiFi.status() == WL_CONNECTED) {
+    checkForFirmwareOTA();
+  }
+
   int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
 
   // 1. Read DHT22
   float temp = 0.0, hum = 0.0;
   readDHTSensor(temp, hum);
   int battery = readBatteryPercentage();
-  Serial.printf("📊 Brood Temp: %.1f °C | Humidity: %.1f %% | Power: %d %% | RSSI: %d dBm\n",
-                temp, hum, battery, rssi);
+  Serial.printf("📊 Brood Temp: %.1f °C | Humidity: %.1f %% | Power: %d %% | RSSI: %d dBm | Free Heap: %u bytes\n",
+                temp, hum, battery, rssi, ESP.getFreeHeap());
 
   // 2. Measure INMP441 Acoustics
   setupI2S();
@@ -483,16 +704,28 @@ void executeAudioRecordingCycle(const char* triggerType) {
   int frequencyHz = 0;
   measureAcoustics(peakAudio, frequencyHz);
 
+  // Capture a single unified timestamp for both /audio_history and /telemetry so they always match
+  String cycleTimeStr = getFormattedTime();
+  String cycleDateStr = getFormattedDate();
+  uint64_t cycleEpochMs = getEpochMillis();
+
   // 3. Record & Upload 3.0s Audio Clip to Firebase (on Restart or Cooldown)
   if (WiFi.status() == WL_CONNECTED) {
-    uploadAudioRecordingToFirebase(temp, hum, frequencyHz, triggerType);
+    uploadAudioRecordingToFirebase(temp, hum, frequencyHz, triggerType, cycleTimeStr, cycleDateStr, cycleEpochMs);
   }
 
   stopI2S();
 
   // 4. Send Telemetry to Firebase Cloud
   if (WiFi.status() == WL_CONNECTED) {
-    sendTelemetryToFirebase(temp, hum, battery, rssi, peakAudio, frequencyHz, triggerType);
+    sendTelemetryToFirebase(temp, hum, battery, rssi, peakAudio, frequencyHz, triggerType, cycleTimeStr, cycleDateStr, cycleEpochMs);
+  }
+
+  // Self-healing memory guard: if free RAM ever drops below 100 KB after weeks of uptime, reboot cleanly
+  if (ESP.getFreeHeap() < 100000) {
+    Serial.println("♻️ [Memory Guard] Low heap detected. Performing clean preventative restart...");
+    delay(200);
+    ESP.restart();
   }
 
   Serial.printf("✅ Sampling cycle complete for [%s]. Entering %d-second cooldown.\n\n",
@@ -506,8 +739,11 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
+  WiFi.mode(WIFI_STA);
+  initWatchdog();
+
   Serial.println("\n========================================");
-  Serial.println("🐝 BeeWare ESP32 Node Initializing...");
+  Serial.printf ("🐝 BeeWare ESP32 Node v%s Initializing...\n", FIRMWARE_VERSION);
   Serial.printf ("📌 Device ID : %s\n", getDeviceId().c_str());
   Serial.printf ("📌 MAC Addr  : %s\n", WiFi.macAddress().c_str());
   String initQr = "https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%7B%22deviceId%22%3A%22" + getDeviceId() + "%22%2C%22mac%22%3A%22" + WiFi.macAddress() + "%22%7D";
@@ -524,6 +760,7 @@ void setup() {
 }
 
 void loop() {
+  feedWatchdog();
   uint32_t elapsed = (millis() - cooldownStartTime) / 1000;
   if (elapsed >= COOLDOWN_SECONDS) {
     Serial.printf("⏰ Cooldown complete (%d s). Running cycle...\n", COOLDOWN_SECONDS);
@@ -532,7 +769,8 @@ void loop() {
   } else {
     if (elapsed != lastCooldownLogSec && elapsed > 0 && (elapsed % 60 == 0)) {
       lastCooldownLogSec = elapsed;
-      Serial.printf("❄️ [Cooldown] %d s remaining...\n", COOLDOWN_SECONDS - elapsed);
+      Serial.printf("❄️ [Cooldown] %d s remaining (Free Heap: %u bytes)...\n",
+                    COOLDOWN_SECONDS - elapsed, ESP.getFreeHeap());
     }
     delay(250);
   }

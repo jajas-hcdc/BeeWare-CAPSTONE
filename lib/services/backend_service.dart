@@ -65,32 +65,56 @@ class BackendService {
               records.add(rec);
             }
           });
-          // Also fetch historical telemetry points for real-time graphs
-          try {
-            final histUri = Uri.parse('$_firebaseRtdbUrl/telemetry_history.json');
-            final histResp = await http.get(histUri).timeout(const Duration(seconds: 3));
-            if (histResp.statusCode == 200 && histResp.body.isNotEmpty && histResp.body != 'null') {
-              final histData = jsonDecode(histResp.body);
-              if (histData is Map<String, dynamic>) {
-                histData.forEach((devKey, points) {
-                  if (points is Map) {
-                    final entries = points.entries.toList();
-                    final recentEntries = entries.length > 25
-                        ? entries.sublist(entries.length - 25)
-                        : entries;
-                    for (var entry in recentEntries) {
-                      final point = entry.value;
-                      if (point is Map) {
-                        final p = Map<String, dynamic>.from(point);
-                        p['device_id'] = devKey;
-                        records.add(p);
+          // Fetch only the latest historical telemetry points per device and auto-prune old entries for 24/7 operation
+          for (final devKey in data.keys) {
+            try {
+              final histUri = Uri.parse(
+                '$_firebaseRtdbUrl/telemetry_history/$devKey.json?orderBy=%22%24key%22&limitToLast=30',
+              );
+              final histResp = await http.get(histUri).timeout(const Duration(seconds: 3));
+              if (histResp.statusCode == 200 && histResp.body.isNotEmpty && histResp.body != 'null') {
+                final points = jsonDecode(histResp.body);
+                if (points is Map) {
+                  final entries = points.entries.toList()
+                    ..sort((a, b) {
+                      final aMap = a.value is Map ? a.value as Map : const {};
+                      final bMap = b.value is Map ? b.value as Map : const {};
+                      final aEpoch = int.tryParse((aMap['epoch'] ?? aMap['created_at'] ?? '').toString()) ?? 0;
+                      final bEpoch = int.tryParse((bMap['epoch'] ?? bMap['created_at'] ?? '').toString()) ?? 0;
+                      if (aEpoch > 0 && bEpoch > 0 && aEpoch != bEpoch) {
+                        return aEpoch.compareTo(bEpoch);
                       }
+                      return a.key.toString().compareTo(b.key.toString());
+                    });
+                  final recentEntries = entries.length > 25
+                      ? entries.sublist(entries.length - 25)
+                      : entries;
+                  for (final entry in recentEntries) {
+                    final point = entry.value;
+                    if (point is Map) {
+                      final p = Map<String, dynamic>.from(point);
+                      p['device_id'] = devKey;
+                      records.add(p);
                     }
                   }
-                });
+                  // Automatically prune older entries in Firebase RTDB so /telemetry_history never grows unbounded 24/7
+                  if (entries.length > 25) {
+                    final Map<String, dynamic> prunedMap = {
+                      for (final e in recentEntries) e.key.toString(): e.value,
+                    };
+                    http
+                        .put(
+                          Uri.parse('$_firebaseRtdbUrl/telemetry_history/$devKey.json'),
+                          headers: {'Content-Type': 'application/json'},
+                          body: jsonEncode(prunedMap),
+                        )
+                        .timeout(const Duration(seconds: 4))
+                        .catchError((_) => http.Response('', 500));
+                  }
+                }
               }
-            }
-          } catch (_) {}
+            } catch (_) {}
+          }
 
           if (records.isNotEmpty) {
             return records;

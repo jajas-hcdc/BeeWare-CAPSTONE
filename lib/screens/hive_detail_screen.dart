@@ -570,7 +570,15 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                             builder: (context) {
                               final recordings = AudioService().getCachedRecordings(_hive.deviceId);
                               final latestClip = recordings.isNotEmpty ? recordings.first : null;
-                              final recTime = latestClip?.formattedRecordedTime ?? _hive.lastAudioRecordedTime;
+                              final bool clipMatchesAcoustic = latestClip != null &&
+                                  '${latestClip.frequency} Hz' == _hive.acoustic.trim();
+                              final recTime = clipMatchesAcoustic
+                                  ? latestClip.formattedRecordedTime
+                                  : ((_hive.lastAudioRecordedTime != null &&
+                                          _hive.lastAudioRecordedTime!.isNotEmpty &&
+                                          _hive.lastAudioRecordedTime != 'null')
+                                      ? _hive.lastAudioRecordedTime
+                                      : latestClip?.formattedRecordedTime);
                               if (recTime == null || recTime.isEmpty) return const SizedBox.shrink();
                               return Padding(
                                 padding: const EdgeInsets.only(top: 2),
@@ -590,6 +598,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                       conditionLabel: _hive.conditionLabel,
                       acousticStatus: _hive.acousticStatus,
                       acoustic: _hive.acoustic,
+                      isOffline: _hive.isSensorOffline,
                     ),
                   ],
                 ),
@@ -832,8 +841,18 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                           builder: (context) {
                             final recordings = AudioService().getCachedRecordings(_hive.deviceId);
                             final latestClip = recordings.isNotEmpty ? recordings.first : null;
-                            final recTime = latestClip?.formattedRecordedTime ?? _hive.lastAudioRecordedTime;
-                            final trigger = latestClip?.triggerLabel ?? _hive.lastAudioTrigger ?? 'Device Cycle';
+                            final bool clipMatchesAcoustic = latestClip != null &&
+                                '${latestClip.frequency} Hz' == _hive.acoustic.trim();
+                            final recTime = clipMatchesAcoustic
+                                ? latestClip.formattedRecordedTime
+                                : ((_hive.lastAudioRecordedTime != null &&
+                                        _hive.lastAudioRecordedTime!.isNotEmpty &&
+                                        _hive.lastAudioRecordedTime != 'null')
+                                    ? _hive.lastAudioRecordedTime
+                                    : latestClip?.formattedRecordedTime);
+                            final trigger = clipMatchesAcoustic
+                                ? latestClip.triggerLabel
+                                : (_hive.lastAudioTrigger ?? latestClip?.triggerLabel ?? 'Device Cycle');
                             if (recTime == null || recTime.isEmpty) return const SizedBox.shrink();
 
                             return Padding(
@@ -866,6 +885,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                     conditionLabel: _hive.conditionLabel,
                     acousticStatus: _hive.acousticStatus,
                     acoustic: _hive.acoustic,
+                    isOffline: _hive.isSensorOffline,
                   ),
                 ],
               ),

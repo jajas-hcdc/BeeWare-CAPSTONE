@@ -597,5 +597,76 @@ void main() {
 
       await sub.cancel();
     });
+
+    testWidgets('Verified TFLite prediction is preserved over unverified ESP32 spike and shows Offline badge when node is offline', (tester) async {
+      final staleEpoch = DateTime.now().subtract(const Duration(minutes: 45)).millisecondsSinceEpoch;
+      hiveService.addHive(
+        HiveData(
+          id: 'hive_field_test',
+          name: 'Hive (Field Test)',
+          deviceId: 'BW-013230',
+          conditionLabel: 'Queen Present',
+          confidence: 92,
+          healthScore: 88,
+          temperature: '28.0',
+          humidity: '82',
+          acoustic: '262 Hz',
+          acousticStatus: 'Normal',
+          updated: 'Offline',
+          wifiStatus: 'Offline',
+          isAlert: false,
+          alertLabel: 'Queen Present',
+          alertMessage: 'Colony is queenright and stable.',
+          lastAudioRecordedTime: '09:20:07 PM',
+          lastAudioCreatedAt: staleEpoch,
+        ),
+      );
+
+      // Apply verified TFLite prediction from Clip #1 (09:20:07 PM, 262 Hz, Queen Present)
+      hiveService.applyAiModelPrediction(
+        deviceId: 'BW-013230',
+        recordingEpoch: staleEpoch,
+        prediction: 'Queen Present',
+        confidence: 92,
+        frequencyHz: 262,
+        recordedTime: '09:20:07 PM',
+      );
+
+      // Simulate unverified ESP32 telemetry spike (532 Hz, Queen Absent) without a newer audio clip
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-013230',
+          'temperature': 27.6,
+          'humidity': 82.2,
+          'frequency': 532,
+          'frequency_hz': 532,
+          'conditionLabel': 'Queen Absent',
+          'last_audio_recorded_time': '11:26:02 PM',
+          'status': 'Offline',
+        }
+      ]);
+
+      final updated = hiveService.getHiveById('hive_field_test')!;
+      expect(updated.conditionLabel, 'Queen Present');
+      expect(updated.acoustic, '262 Hz');
+      expect(updated.lastAudioRecordedTime, '09:20:07 PM');
+      expect(updated.isSensorOffline, isTrue);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AcousticSignalVisualizer(
+              acoustic: updated.acoustic,
+              acousticStatus: updated.acousticStatus,
+              conditionLabel: updated.conditionLabel,
+              isOffline: updated.isSensorOffline,
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(seconds: 6));
+      expect(find.text('262 Hz • Offline'), findsOneWidget);
+      expect(find.text('262 Hz • Active'), findsNothing);
+    });
   });
 }

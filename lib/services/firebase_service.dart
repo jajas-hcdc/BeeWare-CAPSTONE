@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../firebase_options.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/foundation.dart';
@@ -62,6 +63,15 @@ class FirebaseService {
       final msg = _messaging;
       if (msg == null) return;
 
+      final prefs = await SharedPreferences.getInstance();
+      final pushEnabled = prefs.getBool('beeware_push_notifications_enabled') ?? true;
+
+      if (!pushEnabled) {
+        await unsubscribeFromAlertTopic();
+        debugPrint('🔕 [BeeWare FCM] Push notifications disabled in settings — unsubscribed from topic.');
+        return;
+      }
+
       final settings = await msg.requestPermission(
         alert: true,
         badge: true,
@@ -70,11 +80,6 @@ class FirebaseService {
 
       if (settings.authorizationStatus == AuthorizationStatus.authorized ||
           settings.authorizationStatus == AuthorizationStatus.provisional) {
-        await msg.setForegroundNotificationPresentationOptions(
-          alert: true,
-          badge: true,
-          sound: true,
-        );
         await subscribeToAlertTopic();
         final token = await msg.getToken();
         debugPrint('📱 [BeeWare FCM] Registration Token: $token');
@@ -90,6 +95,11 @@ class FirebaseService {
     try {
       final msg = _messaging;
       if (msg == null) return;
+      await msg.setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
       await msg.subscribeToTopic('environment_alerts');
     } catch (e) {
       debugPrint('Topic subscription failed: $e');
@@ -100,6 +110,11 @@ class FirebaseService {
     try {
       final msg = _messaging;
       if (msg == null) return;
+      await msg.setForegroundNotificationPresentationOptions(
+        alert: false,
+        badge: false,
+        sound: false,
+      );
       await msg.unsubscribeFromTopic('environment_alerts');
     } catch (e) {
       debugPrint('Topic unsubscription failed: $e');

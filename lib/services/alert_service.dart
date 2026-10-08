@@ -14,8 +14,7 @@ class AlertService extends ChangeNotifier {
   factory AlertService() => _instance;
 
   AlertService._internal() {
-    _loadFromCache();
-    _init();
+    _loadFromCache().then((_) => _init());
   }
 
   StreamSubscription? _hiveSub;
@@ -38,9 +37,11 @@ class AlertService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('beeware_push_notifications_enabled', value);
       if (value) {
+        _dispatchedNotificationIds.clear();
         await FirebaseService().subscribeToAlertTopic();
       } else {
         await FirebaseService().unsubscribeFromAlertTopic();
+        await NotificationService().cancelAllSystemNotifications();
       }
     } catch (e) {
       debugPrint('Error updating push setting: $e');
@@ -53,6 +54,14 @@ class AlertService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('beeware_alert_notifications_enabled', value);
+      if (value) {
+        _dispatchedNotificationIds.clear();
+      } else {
+        NotificationService().dismissInAppBanner();
+        if (!_pushEnabled) {
+          await NotificationService().cancelAllSystemNotifications();
+        }
+      }
     } catch (e) {
       debugPrint('Error updating alerts setting: $e');
     }
@@ -437,26 +446,30 @@ class AlertService extends ChangeNotifier {
   }
 
   void _dispatchNotificationIfNew(String deviceKey, String dispatchKey, AlertModel alert) {
-    if (!_alertsEnabled) return;
+    if (!_pushEnabled && !_alertsEnabled) return;
     if (!HiveService().isDeviceActivelyOnline(deviceKey)) return;
     if (!_dispatchedNotificationIds.contains(dispatchKey)) {
       _dispatchedNotificationIds.add(dispatchKey);
-      _alertNotificationController.add(alert);
+      if (_alertsEnabled) {
+        _alertNotificationController.add(alert);
+      }
 
       final bool msgAlreadyHasHive = alert.message.toLowerCase().contains(alert.hiveId.toLowerCase()) ||
           alert.message.toUpperCase().contains(deviceKey);
       final String cleanBody = msgAlreadyHasHive ? alert.message : '${alert.hiveId}: ${alert.message}';
 
-      // 1. Trigger immediate native phone pop-up push notification and in-app heads-up banner
+      // 1. Trigger native phone pop-up push notification (if pushEnabled) and/or in-app heads-up banner (if alertsEnabled)
       NotificationService().showNotification(
         id: dispatchKey.hashCode & 0x7FFFFFFF,
         title: alert.title,
         body: cleanBody,
         payload: deviceKey,
         severity: alert.severity,
+        allowSystemPush: _pushEnabled,
+        allowInAppBanner: _alertsEnabled,
       );
 
-      // 2. Also dispatch to cloud backend (FCM) if push notifications are enabled
+      // 2. Also dispatch to cloud backend (FCM) only if push notifications are enabled
       if (_pushEnabled) {
         BackendService()
             .sendAlert(

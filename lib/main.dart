@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'models/hive_data.dart';
 import 'screens/home_screen.dart';
 import 'screens/hives_screen.dart';
@@ -23,6 +24,11 @@ import 'theme/app_theme.dart';
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await FirebaseService.initialize();
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final pushEnabled = prefs.getBool('beeware_push_notifications_enabled') ?? true;
+    if (!pushEnabled) return;
+  } catch (_) {}
   debugPrint('FCM background message received: ${message.messageId}');
   if (message.notification == null && message.data.isNotEmpty) {
     await NotificationService().initialize();
@@ -33,6 +39,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       body: body,
       payload: message.data['hiveId'] ?? message.data['deviceId'],
       severity: message.data['severity'],
+      allowSystemPush: true,
+      allowInAppBanner: false,
     );
   }
 }
@@ -56,7 +64,7 @@ void main() async {
   // Listen to foreground FCM messages dispatched by Render backend
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     debugPrint('📱 [BeeWare] Foreground FCM message received from Render: ${message.messageId}');
-    if (!AlertService().pushEnabled || !AlertService().alertsEnabled) return;
+    if (!AlertService().pushEnabled && !AlertService().alertsEnabled) return;
     final title = message.notification?.title ?? message.data['title'] ?? '🐝 BeeWare Alert';
     final body = message.notification?.body ?? message.data['message'] ?? 'Anomaly detected in hive telemetry.';
     String? targetDevice = (message.data['deviceId'] ?? message.data['hiveId'])?.toString();
@@ -74,6 +82,8 @@ void main() async {
       body: body,
       payload: targetDevice,
       severity: message.data['severity'],
+      allowSystemPush: AlertService().pushEnabled,
+      allowInAppBanner: AlertService().alertsEnabled,
     );
   });
 
