@@ -34,10 +34,14 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final title = (message.data['title'] ?? '🐝 BeeWare Alert').toString();
     final body = (message.data['message'] ?? 'Anomaly detected in hive telemetry.').toString();
     final dataTemp = double.tryParse((message.data['temperature'] ?? '').toString());
+    final dataHum = double.tryParse((message.data['humidity'] ?? '').toString().replaceAll('%', '').trim());
     if (title.toLowerCase().contains('low temp') && dataTemp != null && dataTemp > 25.0) {
       return;
     }
     if (title.toLowerCase().contains('high temp') && dataTemp != null && dataTemp < 85.0) {
+      return;
+    }
+    if (title.toLowerCase().contains('high hum') && dataHum != null && dataHum < 85.0) {
       return;
     }
     await NotificationService().initialize();
@@ -75,12 +79,17 @@ void main() async {
     final title = message.notification?.title ?? message.data['title'] ?? '🐝 BeeWare Alert';
     final body = message.notification?.body ?? message.data['message'] ?? 'Anomaly detected in hive telemetry.';
     final dataTemp = double.tryParse((message.data['temperature'] ?? '').toString());
+    final dataHum = double.tryParse((message.data['humidity'] ?? '').toString().replaceAll('%', '').trim());
     if (title.toString().toLowerCase().contains('low temp') && dataTemp != null && dataTemp > 25.0) {
       debugPrint('🔕 [BeeWare] Ignored FCM low-temp alert above 25.0°C ($dataTemp°C)');
       return;
     }
     if (title.toString().toLowerCase().contains('high temp') && dataTemp != null && dataTemp < 85.0) {
       debugPrint('🔕 [BeeWare] Ignored FCM high-temp alert below 85.0°C ($dataTemp°C)');
+      return;
+    }
+    if (title.toString().toLowerCase().contains('high hum') && dataHum != null && dataHum < 85.0) {
+      debugPrint('🔕 [BeeWare] Ignored FCM high-humidity alert below 85% ($dataHum%)');
       return;
     }
     String? targetDevice = (message.data['deviceId'] ?? message.data['hiveId'])?.toString();

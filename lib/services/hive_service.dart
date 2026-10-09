@@ -1208,13 +1208,13 @@ class HiveService extends ChangeNotifier {
       score -= 35.0; // Critical thermal alert (<= 25.0°C or >= 85.0°C)
     }
 
-    // 2. Relative humidity (Optimal: 50% - 75%)
+    // 2. Relative humidity (Optimal: 50% - 75%, High Humidity Alert: >= 85%)
     if (hum >= 50.0 && hum <= 75.0) {
       // Optimal range
-    } else if ((hum >= 40.0 && hum < 50.0) || (hum > 75.0 && hum <= 88.0)) {
-      score -= 4.0; // Mild deviation
+    } else if ((hum >= 40.0 && hum < 50.0) || (hum > 75.0 && hum < 85.0)) {
+      score -= 4.0; // Mild deviation below 85% alert threshold
     } else {
-      score -= 10.0; // Excess moisture or extreme dryness
+      score -= 10.0; // High humidity alert (>= 85%) or extreme dryness (< 40%)
     }
 
     // 3. Acoustic frequency & Queen condition

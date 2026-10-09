@@ -508,7 +508,7 @@ def send_fcm_telemetry_notification(
 
         is_high_temp = temp >= 85.0
         is_low_temp = (temp > 0.0) and (temp <= 25.0)
-        is_high_hum = hum > 75.0
+        is_high_hum = hum >= 85.0
         is_low_hum = (hum > 0.0) and (hum < 40.0)
         is_low_battery = (battery > 0) and (battery < 15)
 
@@ -550,7 +550,7 @@ def send_fcm_telemetry_notification(
         elif is_high_hum:
             anomaly_key = "high_hum"
             title = f"⚠️ HIGH HUMIDITY ALERT: {device_id} ({hum:.0f}%)"
-            body = f"Excessive moisture ({hum:.0f}%) detected inside hive! Risk of mold and dampness."
+            body = f"Excessive moisture ({hum:.0f}% ≥ 85% threshold) detected inside hive! Risk of mold and dampness."
             severity = "Warning"
         elif is_low_hum:
             anomaly_key = "low_hum"

@@ -141,6 +141,12 @@ class NotificationService {
         text.contains('>= 85.0°c')) {
       return 'high_temperature';
     }
+    if (text.contains('high hum') ||
+        text.contains('excessive moisture') ||
+        text.contains('≥ 85%') ||
+        text.contains('>= 85%')) {
+      return 'high_humidity';
+    }
     if (text.contains('0 hz') ||
         text.contains('not detected') ||
         text.contains('sensor alert') ||
@@ -223,7 +229,8 @@ class NotificationService {
     final category = classifyAnomalyCategory(title, body);
     final now = DateTime.now();
 
-    // Enforce strict <= 25.0°C rule for Low Temperature, >= 85.0°C for High Temperature, and < 500 Hz for Queen Absent alerts
+    // Enforce strict <= 25.0°C rule for Low Temperature, >= 85.0°C for High Temperature,
+    // >= 85.0% for High Humidity, and < 500 Hz for Queen Absent alerts
     if (category == 'low_temperature' || title.toLowerCase().contains('low temp')) {
       final tempMatch = RegExp(r'(\d+(?:\.\d+)?)\s*°c', caseSensitive: false).firstMatch('$title $body');
       if (tempMatch != null) {
@@ -240,6 +247,18 @@ class NotificationService {
         final parsedTemp = double.tryParse(tempMatch.group(1)!) ?? 0.0;
         if (parsedTemp < 85.0) {
           debugPrint('🔕 [BeeWare] Ignored high-temp notification below 85.0°C ($parsedTemp°C): "$title"');
+          return;
+        }
+      }
+    }
+    if (category == 'high_humidity' ||
+        title.toLowerCase().contains('high hum') ||
+        body.toLowerCase().contains('excessive moisture')) {
+      final humMatch = RegExp(r'(\d+(?:\.\d+)?)\s*%', caseSensitive: false).firstMatch('$title $body');
+      if (humMatch != null) {
+        final parsedHum = double.tryParse(humMatch.group(1)!) ?? 0.0;
+        if (parsedHum < 85.0) {
+          debugPrint('🔕 [BeeWare] Ignored high-humidity notification below 85% ($parsedHum%): "$title"');
           return;
         }
       }

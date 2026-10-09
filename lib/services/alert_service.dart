@@ -264,7 +264,11 @@ class AlertService extends ChangeNotifier {
       }
 
       final humVal = double.tryParse(matchingHive.humidity.replaceAll('%', '').trim()) ?? 0.0;
-      if (alert.title.toLowerCase().contains('humidity') && humVal > 0) {
+      if (titleLower.contains('high hum') || alert.id.startsWith('sensor_hum_high_')) {
+        if (humVal < 85.0) {
+          return true;
+        }
+      } else if (titleLower.contains('humidity') && humVal > 0) {
         return true;
       }
 
@@ -298,7 +302,7 @@ class AlertService extends ChangeNotifier {
 
       AlertModel? primaryNotificationAlert;
 
-      // Missing sensor diagnostics (temp <= 0.0, hum <= 0.0, acoustic 0 Hz), Low Temp (<= 25.0°C) & High Temp (>= 85.0°C)
+      // Missing sensor diagnostics (temp <= 0.0, hum <= 0.0, acoustic 0 Hz), Low Temp (<= 25.0°C), High Temp (>= 85.0°C) & High Humidity (>= 85.0%)
       final tempVal = double.tryParse(h.temperature.replaceAll('°C', '').trim());
       final isTempNotDetected = (tempVal != null && tempVal <= 0.0) || h.temperature == '0.0' || h.temperature == '0';
       final isLowTempAlert = tempVal != null && tempVal > 0.0 && tempVal <= 25.0;
@@ -306,6 +310,7 @@ class AlertService extends ChangeNotifier {
 
       final humVal = double.tryParse(h.humidity.replaceAll('%', '').trim());
       final isHumNotDetected = (humVal != null && humVal <= 0.0) || h.humidity == '0.0' || h.humidity == '0';
+      final isHighHumAlert = humVal != null && humVal >= 85.0;
 
       final acousticClean = h.acoustic.trim().toLowerCase();
       final isAcousticNotDetected = acousticClean == '0' ||
@@ -336,6 +341,13 @@ class AlertService extends ChangeNotifier {
         _dismissedAlertIds.remove('sensor_temp_high_${h.id}');
         _dispatchedNotificationIds.remove('${deviceKey}_high_temperature');
         NotificationService().clearDeviceCategoryState(deviceKey, 'high_temperature');
+      }
+
+      // If humidity recovers below 85.0%, clear high_humidity suppression
+      if (isOnline && !isHumNotDetected && !isHighHumAlert && humVal != null && humVal < 85.0) {
+        _dismissedAlertIds.remove('sensor_hum_high_${h.id}');
+        _dispatchedNotificationIds.remove('${deviceKey}_high_humidity');
+        NotificationService().clearDeviceCategoryState(deviceKey, 'high_humidity');
       }
 
       if (isTempNotDetected) {
@@ -422,6 +434,29 @@ class AlertService extends ChangeNotifier {
           result.add(alert);
           primaryNotificationAlert ??= alert;
         }
+      } else if (isHighHumAlert) {
+        final alertId = 'sensor_hum_high_${h.id}';
+        if (!seenIds.contains(alertId) && !_dismissedAlertIds.contains(alertId)) {
+          seenIds.add(alertId);
+          final alert = AlertModel(
+            id: alertId,
+            hiveId: h.name,
+            queenStatus: h.conditionLabel,
+            title: '⚠️ High Humidity Alert (${humVal.toStringAsFixed(0)}%)',
+            message:
+                'Excessive moisture (${humVal.toStringAsFixed(0)}% ≥ 85% threshold) detected inside $displayHiveName! Risk of mold and dampness.',
+            severity: 'Warning',
+            timestamp: DateTime.now(),
+            recommendation:
+                'Improve hive ventilation and check top cover for moisture condensation.',
+            detectedBy: 'DHT22 Humidity Monitor',
+          );
+          result.add(alert);
+          primaryNotificationAlert ??= alert;
+          if (isOnline) {
+            _dispatchNotificationIfNew(deviceKey, '${deviceKey}_high_humidity', alert);
+          }
+        }
       }
 
       if (isAcousticNotDetected) {
@@ -502,6 +537,7 @@ class AlertService extends ChangeNotifier {
           !isLowTempAlert &&
           !isHighTempAlert &&
           !isHumNotDetected &&
+          !isHighHumAlert &&
           !isAcousticNotDetected &&
           !h.isAlert) {
         // Clear all dispatched notification state when the device is online and healthy
