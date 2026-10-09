@@ -139,11 +139,30 @@ class AudioProcessor {
       }
     }
 
-    // If the best bin landed in 320-490 Hz due to broadband rain splatter, check whether
-    // the 90-260 Hz Queen Present band has comparable or strong fundamental energy (>= 45% of peak power).
+    // If the best bin landed below 90 Hz due to INMP441 sub-bass DC drift or 60 Hz mains hum,
+    // check whether the 90-490 Hz honeybee acoustic band contains audible buzzing energy.
     final int beePresentMinBin = max(minBin, (90.0 * _nFft / sampleRate).floor());
     final int beePresentMaxBin = min(maxBin, (260.0 * _nFft / sampleRate).ceil());
-    final int rawHz = ((bestBin * sampleRate) / _nFft).round();
+    int rawHz = ((bestBin * sampleRate) / _nFft).round();
+    if (rawHz < 90 && beePresentMinBin <= maxBin) {
+      int bestBeeBin = beePresentMinBin;
+      double bestBeePower = -1.0;
+      for (int k = beePresentMinBin; k <= maxBin; k++) {
+        if (avgPower[k] > bestBeePower) {
+          bestBeePower = avgPower[k];
+          bestBeeBin = k;
+        }
+      }
+      final double meanFrameBeePower = bestBeePower / frameCount;
+      if (meanFrameBeePower >= 1.0 && bestBeePower >= bestPower * 0.00015) {
+        bestBin = bestBeeBin;
+        bestPower = bestBeePower;
+        rawHz = ((bestBin * sampleRate) / _nFft).round();
+      }
+    }
+
+    // If the best bin landed in 320-490 Hz due to broadband rain splatter, check whether
+    // the 90-260 Hz Queen Present band has comparable or strong fundamental energy (>= 45% of peak power).
     if (rawHz > 320 && beePresentMinBin <= beePresentMaxBin) {
       int bestPresentBin = beePresentMinBin;
       double bestPresentPower = -1.0;
@@ -265,10 +284,21 @@ class AudioProcessor {
     final readFrames    = min(totalFrames, _targetSamples);
 
     final result = List<double>.filled(_targetSamples, 0.0);
+    double sum = 0.0;
+    int validCount = 0;
     for (int i = 0; i < readFrames; i++) {
       final off = dataStart + i * bytesPerFrame;
       if (off + 2 <= bytes.length) {
-        result[i] = bd.getInt16(off, Endian.little) / 32768.0;
+        final s = bd.getInt16(off, Endian.little) / 32768.0;
+        result[i] = s;
+        sum += s;
+        validCount++;
+      }
+    }
+    if (validCount > 0) {
+      final mean = sum / validCount;
+      for (int i = 0; i < validCount; i++) {
+        result[i] -= mean;
       }
     }
     return result;

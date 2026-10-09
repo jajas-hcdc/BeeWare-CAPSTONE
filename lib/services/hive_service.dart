@@ -690,8 +690,22 @@ class HiveService extends ChangeNotifier {
         freqHz = int.tryParse(rawFreq.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
       }
       final cachedPred = _latestModelPredictions[cleanDevId];
-      if (freqHz >= 90 && cachedPred != null && cachedPred.frequencyHz >= 90) {
-        // Prefer the verified TFLite audio clip frequency over unverified ESP32 zero-crossing spikes
+      final rawLastAudioRecTime = (latest['last_audio_recorded_time'] ?? latest['lastAudioRecordedTime'])?.toString();
+      final int rawEpoch = parseNumToInt(
+        latest['last_audio_epoch'] ??
+        latest['epoch'] ??
+        latest['created_at'] ??
+        latest['last_audio_created_at'],
+        0,
+      );
+      final bool hasVerifiedClipForTelemetry = cachedPred != null &&
+          cachedPred.frequencyHz >= 90 &&
+          ((rawEpoch > 1700000000000 && cachedPred.epoch >= rawEpoch) ||
+              (rawLastAudioRecTime != null &&
+                  rawLastAudioRecTime.isNotEmpty &&
+                  rawLastAudioRecTime == cachedPred.recordedTime));
+      if (freqHz > 0 && (freqHz >= 90 || hasVerifiedClipForTelemetry) && cachedPred != null && cachedPred.frequencyHz >= 90) {
+        // Prefer the verified TFLite/FFT audio clip frequency over unverified ESP32 zero-crossing readings
         freqHz = cachedPred.frequencyHz;
       } else if (freqHz <= 0) {
         final cachedHz = cachedPred?.frequencyHz ?? 0;
@@ -712,7 +726,6 @@ class HiveService extends ChangeNotifier {
           : (freqHz < 90 ? 'No Buzz ($freqHz Hz)' : 'Normal');
 
       // Extract last audio recording metadata
-      final rawLastAudioRecTime = (latest['last_audio_recorded_time'] ?? latest['lastAudioRecordedTime'])?.toString();
       final String? lastAudioRecTime = (cachedPred?.recordedTime != null &&
               cachedPred!.recordedTime!.isNotEmpty &&
               freqHz == cachedPred.frequencyHz)
@@ -722,13 +735,6 @@ class HiveService extends ChangeNotifier {
       final lastAudioEpoch = parseNumToInt(latest['last_audio_epoch'] ?? latest['last_audio_created_at'], 0);
 
       // Dynamically compute telemetry freshness (Live vs In Cooldown vs Offline)
-      final int rawEpoch = parseNumToInt(
-        latest['last_audio_epoch'] ??
-        latest['epoch'] ??
-        latest['created_at'] ??
-        latest['last_audio_created_at'],
-        0,
-      );
       int telemetryEpoch = 0;
       if (rawEpoch > 1700000000000) {
         telemetryEpoch = rawEpoch;

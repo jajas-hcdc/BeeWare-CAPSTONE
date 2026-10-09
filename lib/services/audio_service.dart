@@ -34,7 +34,7 @@ class AudioService extends ChangeNotifier {
   bool _isPlaying = false;
   String? _activePlayingId;
   final Map<String, List<AudioRecordingModel>> _recordingsCache = {};
-  final Map<String, ({int createdAt, String condition, int confidence})> _inferredClipsByDevice = {};
+  final Map<String, ({int createdAt, int frequencyHz, String condition, int confidence})> _inferredClipsByDevice = {};
 
   bool get isRecording => _isRecording;
   bool get isPlaying => _isPlaying;
@@ -281,7 +281,7 @@ class AudioService extends ChangeNotifier {
         }
       } else {
         _recordingsCache[cleanId] = [];
-        _inferredClipsByDevice.remove(cleanId);
+        _inferredClipsByDevice.removeWhere((k, _) => k == cleanId || k.startsWith('$cleanId:'));
         HiveService().clearAiModelPrediction(cleanId);
         try {
           final prefs = await SharedPreferences.getInstance();
@@ -297,15 +297,39 @@ class AudioService extends ChangeNotifier {
 
     final trimmed = list.take(5).toList();
 
-    // Run on-device TFLite model (assets/beeware_model.tflite) & FFT frequency extraction on ESP32 audio clips
-    if (trimmed.isNotEmpty) {
-      final latest = trimmed.first;
-      int effectiveHz = latest.frequency;
+    // Run on-device TFLite model (assets/beeware_model.tflite) & FFT frequency extraction across all 5 ESP32 audio clips
+    for (int i = 0; i < trimmed.length; i++) {
+      final clip = trimmed[i];
+      final cacheKey = '$cleanId:${clip.id}:${clip.createdAt}';
+      final prevInferred = _inferredClipsByDevice[cacheKey];
+
+      if (prevInferred != null && prevInferred.createdAt == clip.createdAt) {
+        trimmed[i] = clip.copyWith(
+          frequency: prevInferred.frequencyHz,
+          condition: prevInferred.condition,
+        );
+        if (i == 0 && prevInferred.frequencyHz > 0) {
+          HiveService().applyAiModelPrediction(
+            deviceId: cleanId,
+            recordingEpoch: clip.createdAt,
+            prediction: prevInferred.condition,
+            confidence: prevInferred.confidence,
+            frequencyHz: prevInferred.frequencyHz,
+            recordedTime: clip.formattedRecordedTime,
+            temperature: clip.temperature,
+            humidity: clip.humidity,
+            trigger: clip.triggerLabel,
+          );
+        }
+        continue;
+      }
+
+      int effectiveHz = clip.frequency;
       Uint8List? wavBytes;
 
-      if (latest.audioBase64 != null && latest.audioBase64!.trim().isNotEmpty) {
+      if (clip.audioBase64 != null && clip.audioBase64!.trim().isNotEmpty) {
         try {
-          final cleanBase64 = latest.audioBase64!.trim().replaceAll('\n', '').replaceAll('\r', '');
+          final cleanBase64 = clip.audioBase64!.trim().replaceAll('\n', '').replaceAll('\r', '');
           var bytes = base64Decode(cleanBase64);
           if (bytes.length >= 4 &&
               !(bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46)) {
@@ -313,8 +337,8 @@ class AudioService extends ChangeNotifier {
           }
           wavBytes = bytes;
           // Always extract the true FFT honeybee fundamental (8-490 Hz) from the WAV clip when the ESP32
-          // reports <= 0 Hz OR >= 320 Hz (where crickets/rain average with the bee hum in zero-crossings)
-          if (effectiveHz <= 0 || effectiveHz >= 320) {
+          // reports < 90 Hz (sub-bass drift pulling zero-crossings below 90 Hz) OR >= 320 Hz (cricket/rain spikes)
+          if (effectiveHz < 90 || effectiveHz >= 320) {
             final measuredHz = await AudioProcessor.computeDominantFrequencyHz(bytes);
             if (measuredHz > 0) {
               effectiveHz = measuredHz;
@@ -326,111 +350,76 @@ class AudioService extends ChangeNotifier {
       }
 
       if (effectiveHz < 90) {
-        trimmed[0] = latest.copyWith(
+        trimmed[i] = clip.copyWith(
           frequency: effectiveHz,
           condition: 'No Buzz Detected',
         );
-        if (effectiveHz > 0) {
+        _inferredClipsByDevice[cacheKey] = (
+          createdAt: clip.createdAt,
+          frequencyHz: effectiveHz,
+          condition: 'No Buzz Detected',
+          confidence: 60,
+        );
+        if (i == 0 && effectiveHz > 0) {
           HiveService().applyAiModelPrediction(
             deviceId: cleanId,
-            recordingEpoch: latest.createdAt,
+            recordingEpoch: clip.createdAt,
             prediction: 'No Buzz Detected',
             confidence: 60,
             frequencyHz: effectiveHz,
-            recordedTime: latest.formattedRecordedTime,
-            temperature: latest.temperature,
-            humidity: latest.humidity,
-            trigger: latest.triggerLabel,
+            recordedTime: clip.formattedRecordedTime,
+            temperature: clip.temperature,
+            humidity: clip.humidity,
+            trigger: clip.triggerLabel,
           );
         }
-      } else if (wavBytes != null) {
-        final prevInferred = _inferredClipsByDevice[cleanId];
-        if (prevInferred != null && prevInferred.createdAt == latest.createdAt) {
-          trimmed[0] = latest.copyWith(
-            frequency: effectiveHz,
-            condition: prevInferred.condition,
-          );
-          HiveService().applyAiModelPrediction(
-            deviceId: cleanId,
-            recordingEpoch: latest.createdAt,
-            prediction: prevInferred.condition,
-            confidence: prevInferred.confidence,
-            frequencyHz: effectiveHz,
-            recordedTime: latest.formattedRecordedTime,
-            temperature: latest.temperature,
-            humidity: latest.humidity,
-            trigger: latest.triggerLabel,
-          );
-        } else {
+      } else {
+        final String fallbackCondition = clip.condition.toLowerCase().contains('no buzz') || clip.condition.trim().isEmpty
+            ? ((effectiveHz > 320 && effectiveHz < 500) ? 'Queen Absent' : 'Queen Present')
+            : clip.condition;
+        String resolvedCondition = fallbackCondition;
+        int resolvedConfidence = 92;
+
+        if (wavBytes != null) {
           try {
             final result = await ModelService().predictFromWavBytes(
               wavBytes,
               frequencyHz: effectiveHz,
             );
             if (result != null) {
-              final predLabel = (result['prediction'] ?? latest.condition).toString();
+              resolvedCondition = (result['prediction'] ?? fallbackCondition).toString();
               final confDouble = (result['confidence'] as num?)?.toDouble() ?? 0.90;
-              final confPct = (confDouble * 100).round().clamp(55, 99);
-              _inferredClipsByDevice[cleanId] = (
-                createdAt: latest.createdAt,
-                condition: predLabel,
-                confidence: confPct,
-              );
-              trimmed[0] = latest.copyWith(
-                frequency: effectiveHz,
-                condition: predLabel,
-              );
-              HiveService().applyAiModelPrediction(
-                deviceId: cleanId,
-                recordingEpoch: latest.createdAt,
-                prediction: predLabel,
-                confidence: confPct,
-                frequencyHz: effectiveHz,
-                recordedTime: latest.formattedRecordedTime,
-                temperature: latest.temperature,
-                humidity: latest.humidity,
-                trigger: latest.triggerLabel,
-              );
-            } else {
-              HiveService().applyAiModelPrediction(
-                deviceId: cleanId,
-                recordingEpoch: latest.createdAt,
-                prediction: latest.condition,
-                confidence: 92,
-                frequencyHz: effectiveHz,
-                recordedTime: latest.formattedRecordedTime,
-                temperature: latest.temperature,
-                humidity: latest.humidity,
-                trigger: latest.triggerLabel,
-              );
+              resolvedConfidence = (confDouble * 100).round().clamp(55, 99);
             }
           } catch (e) {
             debugPrint('ℹ️ ESP32 audio TFLite inference skipped: $e');
-            HiveService().applyAiModelPrediction(
-              deviceId: cleanId,
-              recordingEpoch: latest.createdAt,
-              prediction: latest.condition,
-              confidence: 92,
-              frequencyHz: effectiveHz,
-              recordedTime: latest.formattedRecordedTime,
-              temperature: latest.temperature,
-              humidity: latest.humidity,
-              trigger: latest.triggerLabel,
-            );
           }
         }
-      } else if (effectiveHz >= 90) {
-        HiveService().applyAiModelPrediction(
-          deviceId: cleanId,
-          recordingEpoch: latest.createdAt,
-          prediction: latest.condition,
-          confidence: 92,
+
+        _inferredClipsByDevice[cacheKey] = (
+          createdAt: clip.createdAt,
           frequencyHz: effectiveHz,
-          recordedTime: latest.formattedRecordedTime,
-          temperature: latest.temperature,
-          humidity: latest.humidity,
-          trigger: latest.triggerLabel,
+          condition: resolvedCondition,
+          confidence: resolvedConfidence,
         );
+        trimmed[i] = clip.copyWith(
+          frequency: effectiveHz,
+          condition: resolvedCondition,
+        );
+
+        if (i == 0) {
+          HiveService().applyAiModelPrediction(
+            deviceId: cleanId,
+            recordingEpoch: clip.createdAt,
+            prediction: resolvedCondition,
+            confidence: resolvedConfidence,
+            frequencyHz: effectiveHz,
+            recordedTime: clip.formattedRecordedTime,
+            temperature: clip.temperature,
+            humidity: clip.humidity,
+            trigger: clip.triggerLabel,
+          );
+        }
       }
     }
 
