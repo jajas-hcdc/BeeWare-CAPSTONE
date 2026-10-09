@@ -715,7 +715,8 @@ class HiveService extends ChangeNotifier {
           }
         }
       }
-      if (telemetryEpoch == 0) {
+      final explicitStatus = (latest['status'] ?? latest['wifiStatus'])?.toString().toLowerCase() ?? '';
+      if (telemetryEpoch == 0 && explicitStatus != 'offline') {
         final timeCandidate = (latest['timestamp'] ?? latest['last_audio_recorded_time'] ?? latest['lastAudioRecordedTime'])?.toString();
         final dateCandidate = (latest['recorded_date'] ?? latest['recordedDate'])?.toString();
         telemetryEpoch = _parseTimeAndDateToEpoch(timeCandidate, dateCandidate);
@@ -1101,15 +1102,15 @@ class HiveService extends ChangeNotifier {
 
     double score = 100.0;
 
-    // 1. Brood nest temperature (Optimal: 32.0°C - 36.0°C, Low Temp Alert: <= 25.0°C)
+    // 1. Brood nest temperature (Optimal: 32.0°C - 36.0°C, Low Temp Alert: <= 25.0°C, High Temp Alert: >= 85.0°C)
     if (temp >= 32.0 && temp <= 36.0) {
       // Optimal range
-    } else if ((temp >= 30.0 && temp < 32.0) || (temp > 36.0 && temp <= 37.5)) {
+    } else if ((temp >= 30.0 && temp < 32.0) || (temp > 36.0 && temp <= 38.0)) {
       score -= 6.0; // Mild deviation
-    } else if ((temp > 25.0 && temp < 30.0) || (temp > 37.5 && temp <= 39.0)) {
+    } else if ((temp > 25.0 && temp < 30.0) || (temp > 38.0 && temp < 85.0)) {
       score -= 18.0; // Moderate thermal stress
     } else {
-      score -= 35.0; // Severe thermal stress / Low Temp Alert (<= 25.0°C or > 39.0°C)
+      score -= 35.0; // Severe thermal stress (<= 25.0°C or >= 85.0°C)
     }
 
     // 2. Relative humidity (Optimal: 50% - 75%)
