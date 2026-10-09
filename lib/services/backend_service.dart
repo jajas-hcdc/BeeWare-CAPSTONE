@@ -52,7 +52,7 @@ class BackendService {
     // 1. Try Firebase Realtime Database first (accessible from anywhere via Starlink / Mobile Data)
     try {
       final rtdbUri = Uri.parse('$_firebaseRtdbUrl/telemetry.json');
-      final response = await http.get(rtdbUri).timeout(const Duration(seconds: 4));
+      final response = await http.get(rtdbUri).timeout(const Duration(seconds: 8));
 
       if (response.statusCode == 200 && response.body.isNotEmpty && response.body != 'null') {
         final data = jsonDecode(response.body);
@@ -71,7 +71,7 @@ class BackendService {
               final histUri = Uri.parse(
                 '$_firebaseRtdbUrl/telemetry_history/$devKey.json?orderBy=%22%24key%22&limitToLast=30',
               );
-              final histResp = await http.get(histUri).timeout(const Duration(seconds: 3));
+              final histResp = await http.get(histUri).timeout(const Duration(seconds: 6));
               if (histResp.statusCode == 200) {
                 if (histResp.body.isEmpty || histResp.body == 'null') {
                   for (final r in records) {
@@ -88,7 +88,7 @@ class BackendService {
                       final bMap = b.value is Map ? b.value as Map : const {};
                       final aEpoch = int.tryParse((aMap['epoch'] ?? aMap['created_at'] ?? '').toString()) ?? 0;
                       final bEpoch = int.tryParse((bMap['epoch'] ?? bMap['created_at'] ?? '').toString()) ?? 0;
-                      if (aEpoch > 0 && bEpoch > 0 && aEpoch != bEpoch) {
+                      if (aEpoch != bEpoch) {
                         return aEpoch.compareTo(bEpoch);
                       }
                       return a.key.toString().compareTo(b.key.toString());

@@ -196,7 +196,7 @@ class AudioService extends ChangeNotifier {
 
     try {
       final uri = Uri.parse('$_firebaseRtdbUrl/audio_history/$cleanId.json');
-      final resp = await http.get(uri).timeout(const Duration(seconds: 5));
+      final resp = await http.get(uri).timeout(const Duration(seconds: 8));
 
       if (resp.statusCode == 200) {
         rtdbReached = true;
@@ -338,6 +338,9 @@ class AudioService extends ChangeNotifier {
             confidence: 60,
             frequencyHz: effectiveHz,
             recordedTime: latest.formattedRecordedTime,
+            temperature: latest.temperature,
+            humidity: latest.humidity,
+            trigger: latest.triggerLabel,
           );
         }
       } else if (wavBytes != null) {
@@ -354,6 +357,9 @@ class AudioService extends ChangeNotifier {
             confidence: prevInferred.confidence,
             frequencyHz: effectiveHz,
             recordedTime: latest.formattedRecordedTime,
+            temperature: latest.temperature,
+            humidity: latest.humidity,
+            trigger: latest.triggerLabel,
           );
         } else {
           try {
@@ -381,6 +387,9 @@ class AudioService extends ChangeNotifier {
                 confidence: confPct,
                 frequencyHz: effectiveHz,
                 recordedTime: latest.formattedRecordedTime,
+                temperature: latest.temperature,
+                humidity: latest.humidity,
+                trigger: latest.triggerLabel,
               );
             } else {
               HiveService().applyAiModelPrediction(
@@ -390,6 +399,9 @@ class AudioService extends ChangeNotifier {
                 confidence: 92,
                 frequencyHz: effectiveHz,
                 recordedTime: latest.formattedRecordedTime,
+                temperature: latest.temperature,
+                humidity: latest.humidity,
+                trigger: latest.triggerLabel,
               );
             }
           } catch (e) {
@@ -401,6 +413,9 @@ class AudioService extends ChangeNotifier {
               confidence: 92,
               frequencyHz: effectiveHz,
               recordedTime: latest.formattedRecordedTime,
+              temperature: latest.temperature,
+              humidity: latest.humidity,
+              trigger: latest.triggerLabel,
             );
           }
         }
@@ -412,6 +427,9 @@ class AudioService extends ChangeNotifier {
           confidence: 92,
           frequencyHz: effectiveHz,
           recordedTime: latest.formattedRecordedTime,
+          temperature: latest.temperature,
+          humidity: latest.humidity,
+          trigger: latest.triggerLabel,
         );
       }
     }

@@ -358,7 +358,7 @@ class HiveData {
     String effectiveUpdated = (data['updated'] ?? 'Just now').toString();
     if (parsedLastEpoch != null && parsedLastEpoch > 1700000000000) {
       final int ageMs = DateTime.now().millisecondsSinceEpoch - parsedLastEpoch;
-      if (ageMs > 10 * 60 * 1000) {
+      if (ageMs > 22 * 60 * 1000) {
         effectiveWifi = 'Offline';
         final int ageMin = ageMs ~/ (60 * 1000);
         if (ageMin < 60) {
@@ -368,6 +368,9 @@ class HiveData {
         } else {
           effectiveUpdated = '${ageMin ~/ 1440} days ago';
         }
+      } else if (ageMs >= -60000) {
+        effectiveWifi = 'Connected';
+        effectiveUpdated = ageMs > 3 * 60 * 1000 ? 'In Cooldown' : 'Just now';
       }
     }
 

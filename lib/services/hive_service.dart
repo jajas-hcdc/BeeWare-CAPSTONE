@@ -382,12 +382,12 @@ class HiveService extends ChangeNotifier {
   }
 
   /// Returns true ONLY if [deviceOrHiveId] belongs to an ESP32 node that is
-  /// actively powered on and has transmitted telemetry within the last 10 minutes.
+  /// actively powered on and has transmitted telemetry within the last 22 minutes.
   bool isDeviceActivelyOnline(String? deviceOrHiveId) {
     if (deviceOrHiveId == null || deviceOrHiveId.trim().isEmpty) return false;
     final clean = deviceOrHiveId.trim().toUpperCase();
 
-    // 1. Check active discovered nodes (already verified <= 10 min freshness)
+    // 1. Check active discovered nodes (already verified <= 22 min freshness)
     if (_unpairedNodes.containsKey(clean)) {
       final node = _unpairedNodes[clean]!;
       if (node.wifiStatus.toLowerCase() != 'offline') {
@@ -412,7 +412,7 @@ class HiveService extends ChangeNotifier {
         final lastEpoch = h.lastAudioCreatedAt ?? 0;
         if (lastEpoch > 1700000000000) {
           final ageMs = nowMs - lastEpoch;
-          return ageMs >= -60000 && ageMs <= 10 * 60 * 1000;
+          return ageMs >= -60000 && ageMs <= 22 * 60 * 1000;
         }
         return false;
       }
@@ -751,6 +751,17 @@ class HiveService extends ChangeNotifier {
         telemetryEpoch = _parseTimeAndDateToEpoch(timeCandidate, dateCandidate);
       }
 
+      // If /audio_history already recorded a newer clip epoch than /telemetry (e.g. when /telemetry dropped after audio upload),
+      // use the newer audio clip epoch so the node is not falsely marked offline.
+      if (existingIdx != -1 && explicitStatus != 'offline') {
+        final existingAudioEpoch = _hives[existingIdx].lastAudioCreatedAt ?? 0;
+        final cachedPredEpoch = cachedPred?.epoch ?? 0;
+        final newestKnownEpoch = max(existingAudioEpoch, cachedPredEpoch);
+        if (telemetryEpoch > 1700000000000 && newestKnownEpoch > telemetryEpoch) {
+          telemetryEpoch = newestKnownEpoch;
+        }
+      }
+
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       String computedWifiStatus = 'Connected';
       String computedUpdated = 'Just now';
@@ -758,8 +769,8 @@ class HiveService extends ChangeNotifier {
 
       if (telemetryEpoch > 1700000000000) {
         final ageMs = nowMs - telemetryEpoch;
-        if (ageMs > 10 * 60 * 1000) {
-          // If no telemetry received for over 10 minutes (ESP32 cooldown is 5 min / 300s)
+        if (ageMs > 22 * 60 * 1000) {
+          // If no telemetry or audio received for over 22 minutes (tolerating delayed 5-min cooldown cycles)
           computedWifiStatus = 'Offline';
           isNodeActivelyTransmitting = false;
           final ageMin = ageMs ~/ (60 * 1000);
@@ -1045,6 +1056,9 @@ class HiveService extends ChangeNotifier {
     required int confidence,
     required int frequencyHz,
     String? recordedTime,
+    double? temperature,
+    double? humidity,
+    String? trigger,
   }) {
     if (frequencyHz <= 0) return;
     final cleanDevId = deviceId.trim().toUpperCase();
@@ -1089,8 +1103,17 @@ class HiveService extends ChangeNotifier {
     final isAcc = !isSub90NoBuzz && effectivePred.toLowerCase().contains('accepted');
     final isPres = !isSub90NoBuzz && !isAbs && !isRej && !isAcc;
 
-    final tempVal = double.tryParse(existing.temperature.replaceAll('°C', '').trim()) ?? 34.0;
-    final humVal = double.tryParse(existing.humidity.replaceAll('%', '').trim()) ?? 60.0;
+    final bool isNewerAudioClip = recordingEpoch > 1700000000000 && recordingEpoch > existingEpoch;
+    final int ageMs = DateTime.now().millisecondsSinceEpoch - recordingEpoch;
+    final bool isAudioClipFreshOnline =
+        recordingEpoch > 1700000000000 && ageMs >= -60000 && ageMs <= 22 * 60 * 1000;
+
+    final double tempVal = (isNewerAudioClip && temperature != null && temperature > 0.0)
+        ? temperature
+        : (double.tryParse(existing.temperature.replaceAll('°C', '').trim()) ?? 34.0);
+    final double humVal = (isNewerAudioClip && humidity != null && humidity > 0.0)
+        ? humidity
+        : (double.tryParse(existing.humidity.replaceAll('%', '').trim()) ?? 60.0);
     final dynamicHealth = _calculateDynamicHealthScore(
       temp: tempVal,
       hum: humVal,
@@ -1102,6 +1125,12 @@ class HiveService extends ChangeNotifier {
       conditionLabel: effectivePred,
       confidence: isSub90NoBuzz ? 60 : confidence,
       healthScore: dynamicHealth,
+      temperature: (isNewerAudioClip && temperature != null && temperature > 0.0)
+          ? temperature.toStringAsFixed(1)
+          : existing.temperature,
+      humidity: (isNewerAudioClip && humidity != null && humidity > 0.0)
+          ? humidity.toStringAsFixed(0)
+          : existing.humidity,
       acoustic: '$frequencyHz Hz',
       acousticStatus: isSub90NoBuzz ? 'No Buzz ($frequencyHz Hz)' : 'Normal',
       explanation: explanationText,
@@ -1128,6 +1157,20 @@ class HiveService extends ChangeNotifier {
       lastAudioRecordedTime: (recordedTime != null && recordedTime.isNotEmpty)
           ? recordedTime
           : existing.lastAudioRecordedTime,
+      lastAudioTrigger: (isNewerAudioClip && trigger != null && trigger.isNotEmpty)
+          ? trigger
+          : existing.lastAudioTrigger,
+      lastAudioCreatedAt: isNewerAudioClip ? recordingEpoch : existing.lastAudioCreatedAt,
+      wifiStatus: (isNewerAudioClip && isAudioClipFreshOnline) ? 'Connected' : existing.wifiStatus,
+      updated: (isNewerAudioClip && isAudioClipFreshOnline)
+          ? (ageMs > 3 * 60 * 1000 ? 'In Cooldown' : 'Just now')
+          : existing.updated,
+      batteryLevel: (isNewerAudioClip && isAudioClipFreshOnline && existing.batteryLevel == 'Offline')
+          ? 'Plugged In'
+          : existing.batteryLevel,
+      signalBars: (isNewerAudioClip && isAudioClipFreshOnline && existing.signalBars == 0)
+          ? 4
+          : existing.signalBars,
     );
 
     _saveToCache();
