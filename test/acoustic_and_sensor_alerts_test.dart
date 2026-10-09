@@ -789,5 +789,71 @@ void main() {
 
       await sub.cancel();
     });
+
+    test('High Temperature Alert triggers at >= 85.0°C and resolves below 85.0°C', () async {
+      final triggeredTitles = <String>[];
+      final sub = alertService.onAlertTriggered.listen((a) => triggeredTitles.add(a.title));
+
+      hiveService.addHive(
+        HiveData(
+          id: 'hive_high_temp_test',
+          name: 'High Temp Test Hive',
+          deviceId: 'BW-HIGHTEMP-01',
+          conditionLabel: 'Queen Present',
+          confidence: 95,
+          healthScore: 95,
+          temperature: '37.5',
+          humidity: '60',
+          acoustic: '210 Hz',
+          acousticStatus: 'Normal',
+          updated: 'Just now',
+          wifiStatus: 'Connected',
+          isAlert: false,
+          alertLabel: 'Queen Present',
+          alertMessage: 'Colony is queenright and stable.',
+        ),
+      );
+
+      // 1. At 37.5°C (< 85.0°C), no High Temperature Alert should trigger
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+      expect(alertService.alerts.any((a) => a.id == 'sensor_temp_high_hive_high_temp_test'), isFalse);
+
+      // 2. Rise to 85.0°C -> triggers High Temperature Alert
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-HIGHTEMP-01',
+          'temperature': 85.0,
+          'humidity': 60.0,
+          'frequency': 210,
+          'frequency_hz': 210,
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+
+      final highAlert = alertService.alerts.where((a) => a.id == 'sensor_temp_high_hive_high_temp_test').toList();
+      expect(highAlert, isNotEmpty);
+      expect(highAlert.first.title, contains('High Temperature Alert (85.0°C)'));
+      expect(highAlert.first.severity, 'Critical');
+      expect(triggeredTitles.any((t) => t.contains('High Temperature Alert')), isTrue);
+
+      // 3. Cool back down to 35.0°C (< 85.0°C) -> resolves High Temperature Alert
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-HIGHTEMP-01',
+          'temperature': 35.0,
+          'humidity': 60.0,
+          'frequency': 210,
+          'frequency_hz': 210,
+        }
+      ]);
+      alertService.refreshFromCloud();
+      await Future.delayed(Duration.zero);
+      expect(alertService.alerts.any((a) => a.id == 'sensor_temp_high_hive_high_temp_test'), isFalse);
+
+      await sub.cancel();
+    });
   });
 }
+

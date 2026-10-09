@@ -135,6 +135,12 @@ class NotificationService {
         text.contains('<= 25.0°c')) {
       return 'low_temperature';
     }
+    if (text.contains('high temp') ||
+        text.contains('overheating') ||
+        text.contains('≥ 85.0°c') ||
+        text.contains('>= 85.0°c')) {
+      return 'high_temperature';
+    }
     if (text.contains('0 hz') ||
         text.contains('not detected') ||
         text.contains('sensor alert') ||
@@ -217,13 +223,23 @@ class NotificationService {
     final category = classifyAnomalyCategory(title, body);
     final now = DateTime.now();
 
-    // Enforce strict <= 25.0°C rule for Low Temperature alerts and < 500 Hz for Queen Absent alerts
+    // Enforce strict <= 25.0°C rule for Low Temperature, >= 85.0°C for High Temperature, and < 500 Hz for Queen Absent alerts
     if (category == 'low_temperature' || title.toLowerCase().contains('low temp')) {
       final tempMatch = RegExp(r'(\d+(?:\.\d+)?)\s*°c', caseSensitive: false).firstMatch('$title $body');
       if (tempMatch != null) {
         final parsedTemp = double.tryParse(tempMatch.group(1)!) ?? 0.0;
         if (parsedTemp > 25.0) {
           debugPrint('🔕 [BeeWare] Ignored low-temp notification above 25.0°C ($parsedTemp°C): "$title"');
+          return;
+        }
+      }
+    }
+    if (category == 'high_temperature' || title.toLowerCase().contains('high temp')) {
+      final tempMatch = RegExp(r'(\d+(?:\.\d+)?)\s*°c', caseSensitive: false).firstMatch('$title $body');
+      if (tempMatch != null) {
+        final parsedTemp = double.tryParse(tempMatch.group(1)!) ?? 0.0;
+        if (parsedTemp < 85.0) {
+          debugPrint('🔕 [BeeWare] Ignored high-temp notification below 85.0°C ($parsedTemp°C): "$title"');
           return;
         }
       }

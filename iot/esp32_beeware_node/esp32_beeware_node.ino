@@ -190,7 +190,7 @@ void readDHTSensor(float &temp, float &hum) {
     float t = dht.readTemperature();
     float h = dht.readHumidity();
 
-    if (!isnan(t) && !isnan(h) && (t >= -40.0 && t <= 80.0) && (h >= 0.0 && h <= 100.0) && (t > 0.0 || h > 0.0)) {
+    if (!isnan(t) && !isnan(h) && (t >= -40.0 && t <= 100.0) && (h >= 0.0 && h <= 100.0) && (t > 0.0 || h > 0.0)) {
       temp = t;
       hum  = h;
       return;

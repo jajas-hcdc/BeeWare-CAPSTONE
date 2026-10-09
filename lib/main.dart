@@ -37,6 +37,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     if (title.toLowerCase().contains('low temp') && dataTemp != null && dataTemp > 25.0) {
       return;
     }
+    if (title.toLowerCase().contains('high temp') && dataTemp != null && dataTemp < 85.0) {
+      return;
+    }
     await NotificationService().initialize();
     await NotificationService().showNotification(
       title: title,
@@ -74,6 +77,10 @@ void main() async {
     final dataTemp = double.tryParse((message.data['temperature'] ?? '').toString());
     if (title.toString().toLowerCase().contains('low temp') && dataTemp != null && dataTemp > 25.0) {
       debugPrint('🔕 [BeeWare] Ignored FCM low-temp alert above 25.0°C ($dataTemp°C)');
+      return;
+    }
+    if (title.toString().toLowerCase().contains('high temp') && dataTemp != null && dataTemp < 85.0) {
+      debugPrint('🔕 [BeeWare] Ignored FCM high-temp alert below 85.0°C ($dataTemp°C)');
       return;
     }
     String? targetDevice = (message.data['deviceId'] ?? message.data['hiveId'])?.toString();

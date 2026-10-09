@@ -454,7 +454,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
               ),
               const SizedBox(width: 4),
               const Text(
-                'Optimal Brood Nest Zone (32.0°C - 36.0°C • Alert ≤ 25.0°C)',
+                'Optimal Brood Nest Zone (32.0°C - 36.0°C • Alert ≤ 25.0°C / ≥ 85.0°C)',
                 style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
               ),
             ],
@@ -516,11 +516,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 barGroups: List.generate(temps.length, (i) {
                   final t = temps[i];
                   final isOptimal = t >= 32.0 && t <= 36.0;
-                  final isLowAlert = t > 0.0 && t <= 25.0;
-                  final isHot = t > 36.0;
+                  final isTempAlert = (t > 0.0 && t <= 25.0) || t >= 85.0;
+                  final isHot = t > 36.0 && t < 85.0;
                   final barColor = isOptimal
                       ? AppColors.healthyGreen
-                      : (isLowAlert
+                      : (isTempAlert
                           ? const Color(0xFFD32F2F)
                           : (isHot ? const Color(0xFFE65100) : const Color(0xFFFFB300)));
                   final safeToY = t.clamp(0.0, maxY * 0.92);

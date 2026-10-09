@@ -26,8 +26,8 @@ class TemperatureVisualizer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isSafe = currentTemp >= safeMin && currentTemp <= safeMax;
-    final isLowAlert = currentTemp <= 25.0;
-    final primaryColor = isLowAlert
+    final isTempAlert = currentTemp <= 25.0 || currentTemp >= 85.0;
+    final primaryColor = isTempAlert
         ? const Color(0xFFD32F2F)
         : (isSafe ? const Color(0xFFE65100) : const Color(0xFFF57C00));
 

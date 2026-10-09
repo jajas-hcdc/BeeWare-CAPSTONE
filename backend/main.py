@@ -506,7 +506,7 @@ def send_fcm_telemetry_notification(
         is_queen_absent = (is_queen_absent_freq or ("absent" in cond_lower and frequency < 500)) and not is_queen_present_freq
         is_queen_rejected = ("rejected" in cond_lower and frequency < 500) and not is_queen_present_freq
 
-        is_high_temp = temp > 37.0
+        is_high_temp = temp >= 85.0
         is_low_temp = (temp > 0.0) and (temp <= 25.0)
         is_high_hum = hum > 75.0
         is_low_hum = (hum > 0.0) and (hum < 40.0)
@@ -540,7 +540,7 @@ def send_fcm_telemetry_notification(
         elif is_high_temp:
             anomaly_key = "high_temp"
             title = f"🚨 HIGH TEMP ALERT: {device_id} ({temp:.1f}°C)"
-            body = f"Brood nest overheating risk! Temp is {temp:.1f}°C (Max optimal: 36.0°C). Inspect ventilation and shade."
+            body = f"Brood nest overheating risk! Temp is {temp:.1f}°C (Alert threshold: ≥ 85.0°C, Optimal: 32.0°C–36.0°C). Inspect ventilation and shade."
             severity = "Critical"
         elif is_low_temp:
             anomaly_key = "low_temp"
