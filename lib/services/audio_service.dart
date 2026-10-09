@@ -192,69 +192,76 @@ class AudioService extends ChangeNotifier {
     if (cleanId.isEmpty) return [];
 
     final List<AudioRecordingModel> list = [];
+    bool rtdbReached = false;
 
     try {
       final uri = Uri.parse('$_firebaseRtdbUrl/audio_history/$cleanId.json');
       final resp = await http.get(uri).timeout(const Duration(seconds: 5));
 
-      if (resp.statusCode == 200 && resp.body.isNotEmpty && resp.body != 'null') {
-        final data = jsonDecode(resp.body);
+      if (resp.statusCode == 200) {
+        rtdbReached = true;
+        if (resp.body.isNotEmpty && resp.body != 'null') {
+          final data = jsonDecode(resp.body);
 
-        if (data is Map<String, dynamic>) {
-          final entries = <Map<String, dynamic>>[];
+          if (data is Map<String, dynamic>) {
+            final entries = <Map<String, dynamic>>[];
 
-          data.forEach((slotKey, slotData) {
-            if (slotData is Map) {
-              final map = Map<String, dynamic>.from(slotData);
-              map['_slotKey'] = slotKey.toString();
+            data.forEach((slotKey, slotData) {
+              if (slotData is Map) {
+                final map = Map<String, dynamic>.from(slotData);
+                map['_slotKey'] = slotKey.toString();
 
-              int rawCreated = 0;
-              final rawVal = map['created_at'] ?? map['createdAt'];
-              if (rawVal is num) {
-                rawCreated = rawVal.toInt();
-              } else if (rawVal is String) {
-                rawCreated = int.tryParse(rawVal) ?? 0;
+                int rawCreated = 0;
+                final rawVal = map['created_at'] ?? map['createdAt'];
+                if (rawVal is num) {
+                  rawCreated = rawVal.toInt();
+                } else if (rawVal is String) {
+                  rawCreated = int.tryParse(rawVal) ?? 0;
+                }
+                map['_rawCreatedAt'] = rawCreated;
+                entries.add(map);
               }
-              map['_rawCreatedAt'] = rawCreated;
-              entries.add(map);
-            }
-          });
+            });
 
-          bool hasValidClockEntries = false;
-          for (final entry in entries) {
-            final rawCreated = entry['_rawCreatedAt'] as int;
-            final recTime = (entry['recorded_time'] ?? entry['recordedTime'] ?? entry['timestamp'])?.toString();
-            final recDate = (entry['recorded_date'] ?? entry['recordedDate'])?.toString();
-            int realEpoch = 0;
-            if (rawCreated > 1700000000000) {
-              realEpoch = rawCreated;
-            } else if (rawCreated > 1700000000) {
-              realEpoch = rawCreated * 1000;
-            } else {
-              realEpoch = _parseRecordedTimeAndDate(recTime, recDate);
-            }
-            entry['_resolvedEpoch'] = realEpoch;
-            if (realEpoch > 1700000000000) {
-              hasValidClockEntries = true;
-            }
-          }
-
-          for (final entry in entries) {
-            final slotKey = entry['_slotKey'] as String;
-            final rawCreated = entry['_rawCreatedAt'] as int;
-            final resolvedEpoch = entry['_resolvedEpoch'] as int;
-
-            // Skip legacy pre-NTP slots that lack a real timestamp when valid NTP slots exist
-            if (hasValidClockEntries && resolvedEpoch == 0) {
-              continue;
+            bool hasValidClockEntries = false;
+            for (final entry in entries) {
+              final rawCreated = entry['_rawCreatedAt'] as int;
+              final recTime = (entry['recorded_time'] ?? entry['recordedTime'] ?? entry['timestamp'])?.toString();
+              final recDate = (entry['recorded_date'] ?? entry['recordedDate'])?.toString();
+              int realEpoch = 0;
+              if (rawCreated > 1700000000000) {
+                realEpoch = rawCreated;
+              } else if (rawCreated > 1700000000) {
+                realEpoch = rawCreated * 1000;
+              } else {
+                realEpoch = _parseRecordedTimeAndDate(recTime, recDate);
+              }
+              entry['_resolvedEpoch'] = realEpoch;
+              if (realEpoch > 1700000000000) {
+                hasValidClockEntries = true;
+              }
             }
 
-            final effectiveEpoch = resolvedEpoch > 0 ? resolvedEpoch : rawCreated;
-            entry['createdAt'] = effectiveEpoch;
-            entry['created_at'] = effectiveEpoch;
+            for (final entry in entries) {
+              final slotKey = entry['_slotKey'] as String;
+              final rawCreated = entry['_rawCreatedAt'] as int;
+              final resolvedEpoch = entry['_resolvedEpoch'] as int;
 
-            final model = AudioRecordingModel.fromMap(slotKey, entry);
-            list.add(model);
+              // Skip legacy pre-NTP slots that lack a real timestamp when valid NTP slots exist
+              if (hasValidClockEntries && resolvedEpoch == 0) {
+                continue;
+              }
+
+              final effectiveEpoch = resolvedEpoch > 0 ? resolvedEpoch : rawCreated;
+              entry['createdAt'] = effectiveEpoch;
+              entry['created_at'] = effectiveEpoch;
+
+              var model = AudioRecordingModel.fromMap(slotKey, entry);
+              if (model.frequency >= 500 && model.condition.toLowerCase().contains('absent')) {
+                model = model.copyWith(condition: 'Queen Present');
+              }
+              list.add(model);
+            }
           }
         }
       }
@@ -262,13 +269,26 @@ class AudioService extends ChangeNotifier {
       debugPrint('Fetch audio recordings from Firebase RTDB error: $e');
     }
 
-    // Only fall back to cached recordings if the network fetch returned empty
+    // Only fall back to cached recordings when offline (!rtdbReached).
+    // If Firebase RTDB returned 200 OK with empty/null (user deleted /audio_history), clear local cache cleanly.
     if (list.isEmpty) {
-      final existingCached = _recordingsCache[cleanId] ?? [];
-      for (final cached in existingCached) {
-        if (!cached.id.startsWith('telemetry_')) {
-          list.add(cached);
+      if (!rtdbReached) {
+        final existingCached = _recordingsCache[cleanId] ?? [];
+        for (final cached in existingCached) {
+          if (!cached.id.startsWith('telemetry_')) {
+            list.add(cached);
+          }
         }
+      } else {
+        _recordingsCache[cleanId] = [];
+        _inferredClipsByDevice.remove(cleanId);
+        HiveService().clearAiModelPrediction(cleanId);
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove('beeware_cached_audio_$cleanId');
+        } catch (_) {}
+        notifyListeners();
+        return [];
       }
     }
 

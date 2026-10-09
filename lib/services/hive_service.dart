@@ -160,9 +160,25 @@ class HiveService extends ChangeNotifier {
             h.name.toUpperCase() != h.deviceId.toUpperCase();
         final int hEpoch = h.lastAudioCreatedAt ?? 0;
         final int curEpoch = current.lastAudioCreatedAt ?? 0;
-        final HiveData newerTelemetry = hEpoch >= curEpoch ? h : current;
+        final bool hHasRealTelemetry = h.temperature != '--' && !h.acoustic.startsWith('0');
+        final bool curHasRealTelemetry = current.temperature != '--' && !current.acoustic.startsWith('0');
+        final HiveData newerTelemetry = (hEpoch > curEpoch || (hEpoch == curEpoch && hHasRealTelemetry && !curHasRealTelemetry))
+            ? h
+            : current;
         if (preferH) {
           deduplicated[key] = h.copyWith(
+            conditionLabel: newerTelemetry.conditionLabel,
+            healthScore: newerTelemetry.healthScore,
+            confidence: newerTelemetry.confidence,
+            explanation: newerTelemetry.explanation,
+            queenPresentDetected: newerTelemetry.queenPresentDetected,
+            queenAbsentDetected: newerTelemetry.queenAbsentDetected,
+            queenAcceptedDetected: newerTelemetry.queenAcceptedDetected,
+            queenRejectedDetected: newerTelemetry.queenRejectedDetected,
+            wifiStatus: newerTelemetry.wifiStatus,
+            signalBars: newerTelemetry.signalBars,
+            updated: newerTelemetry.updated,
+            batteryLevel: newerTelemetry.batteryLevel,
             temperature: newerTelemetry.temperature != '--' ? newerTelemetry.temperature : current.temperature,
             humidity: newerTelemetry.humidity != '--' ? newerTelemetry.humidity : current.humidity,
             acoustic: newerTelemetry.acoustic,
@@ -176,6 +192,18 @@ class HiveService extends ChangeNotifier {
           );
         } else {
           deduplicated[key] = current.copyWith(
+            conditionLabel: newerTelemetry.conditionLabel,
+            healthScore: newerTelemetry.healthScore,
+            confidence: newerTelemetry.confidence,
+            explanation: newerTelemetry.explanation,
+            queenPresentDetected: newerTelemetry.queenPresentDetected,
+            queenAbsentDetected: newerTelemetry.queenAbsentDetected,
+            queenAcceptedDetected: newerTelemetry.queenAcceptedDetected,
+            queenRejectedDetected: newerTelemetry.queenRejectedDetected,
+            wifiStatus: newerTelemetry.wifiStatus,
+            signalBars: newerTelemetry.signalBars,
+            updated: newerTelemetry.updated,
+            batteryLevel: newerTelemetry.batteryLevel,
             temperature: newerTelemetry.temperature != '--' ? newerTelemetry.temperature : h.temperature,
             humidity: newerTelemetry.humidity != '--' ? newerTelemetry.humidity : h.humidity,
             acoustic: newerTelemetry.acoustic,
@@ -220,7 +248,7 @@ class HiveService extends ChangeNotifier {
   }
 
   /// Manually trigger a fresh cloud fetch (e.g. pull to refresh or reconnection)
-  Future<void> refreshFromCloud() async {
+  Future<void> refreshFromCloud({bool notify = true}) async {
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection('hives')
@@ -232,12 +260,12 @@ class HiveService extends ChangeNotifier {
 
         _saveToCache();
         ConnectivityService().recordSyncEvent();
-        notifyListeners();
+        if (notify) notifyListeners();
       } else {
         _hives = [];
         _saveToCache();
         ConnectivityService().recordSyncEvent();
-        notifyListeners();
+        if (notify) notifyListeners();
       }
     } catch (e) {
       debugPrint('Cloud refresh skipped or offline: $e');
@@ -456,8 +484,8 @@ class HiveService extends ChangeNotifier {
     if (records.isEmpty) {
       if (_unpairedNodes.isNotEmpty) {
         _unpairedNodes.clear();
-        _debouncedNotify();
       }
+      _debouncedNotify();
       return;
     }
 
@@ -587,8 +615,9 @@ class HiveService extends ChangeNotifier {
       List<double> humHist = incomingHums;
       List<String> datesHist = incomingDates;
       List<double> acousticHist = incomingAcoustics;
+      final bool isHistoryCleared = latest['_historyCleared'] == true;
 
-      if (existingIdx != -1) {
+      if (existingIdx != -1 && !isHistoryCleared) {
         final existing = _hives[existingIdx];
 
         // Harmonize existing history arrays to the same length
@@ -1001,6 +1030,12 @@ class HiveService extends ChangeNotifier {
     }
   }
 
+  /// Clears any cached on-device AI model prediction for [deviceId] (e.g. when /audio_history is cleared).
+  void clearAiModelPrediction(String deviceId) {
+    final cleanDevId = deviceId.trim().toUpperCase();
+    _latestModelPredictions.remove(cleanDevId);
+  }
+
   /// Applies the classification result from the on-device TFLite model (assets/beeware_model.tflite)
   /// trained on the 1,275-sample bee acoustic dataset to the target hive.
   void applyAiModelPrediction({
@@ -1016,7 +1051,10 @@ class HiveService extends ChangeNotifier {
     if (cleanDevId.isEmpty) return;
 
     final bool isSub90NoBuzz = frequencyHz < 90 || prediction.toLowerCase().contains('no buzz');
-    final String effectivePred = isSub90NoBuzz ? 'No Buzz Detected' : prediction;
+    final String sanitizedPred = (frequencyHz >= 500 && prediction.toLowerCase().contains('absent'))
+        ? 'Queen Present'
+        : prediction;
+    final String effectivePred = isSub90NoBuzz ? 'No Buzz Detected' : sanitizedPred;
     final String explanationText = isSub90NoBuzz
         ? '⚠️ No Buzz Detected ($frequencyHz Hz is in the 0-89 Hz background floor).'
         : 'BeeWare CNN TFLite Model (1,275-sample dataset) + INMP441 ($frequencyHz Hz) classified colony state as $effectivePred ($confidence% confidence).';
@@ -1037,6 +1075,14 @@ class HiveService extends ChangeNotifier {
 
     if (index == -1) return;
     final existing = _hives[index];
+
+    // Do not let an older audio clip overwrite a newer live telemetry reading's state
+    final int existingEpoch = existing.lastAudioCreatedAt ?? 0;
+    if (existingEpoch > 1700000000000 &&
+        recordingEpoch > 1700000000000 &&
+        recordingEpoch + 60000 < existingEpoch) {
+      return;
+    }
 
     final isAbs = !isSub90NoBuzz && effectivePred.toLowerCase().contains('absent');
     final isRej = !isSub90NoBuzz && effectivePred.toLowerCase().contains('rejected');
@@ -1106,20 +1152,20 @@ class HiveService extends ChangeNotifier {
     if (temp >= 32.0 && temp <= 36.0) {
       // Optimal range
     } else if ((temp >= 30.0 && temp < 32.0) || (temp > 36.0 && temp <= 38.0)) {
-      score -= 6.0; // Mild deviation
-    } else if ((temp > 25.0 && temp < 30.0) || (temp > 38.0 && temp < 85.0)) {
-      score -= 18.0; // Moderate thermal stress
+      score -= 4.0; // Mild deviation
+    } else if (temp > 25.0 && temp < 85.0) {
+      score -= 8.0; // Normal field fluctuation within non-alert bounds (25.1°C - 84.9°C)
     } else {
-      score -= 35.0; // Severe thermal stress (<= 25.0°C or >= 85.0°C)
+      score -= 35.0; // Critical thermal alert (<= 25.0°C or >= 85.0°C)
     }
 
     // 2. Relative humidity (Optimal: 50% - 75%)
     if (hum >= 50.0 && hum <= 75.0) {
       // Optimal range
-    } else if ((hum >= 40.0 && hum < 50.0) || (hum > 75.0 && hum <= 82.0)) {
-      score -= 5.0; // Mild deviation
+    } else if ((hum >= 40.0 && hum < 50.0) || (hum > 75.0 && hum <= 88.0)) {
+      score -= 4.0; // Mild deviation
     } else {
-      score -= 15.0; // Excess moisture or extreme dryness
+      score -= 10.0; // Excess moisture or extreme dryness
     }
 
     // 3. Acoustic frequency & Queen condition

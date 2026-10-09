@@ -72,11 +72,18 @@ class BackendService {
                 '$_firebaseRtdbUrl/telemetry_history/$devKey.json?orderBy=%22%24key%22&limitToLast=30',
               );
               final histResp = await http.get(histUri).timeout(const Duration(seconds: 3));
-              if (histResp.statusCode == 200 && histResp.body.isNotEmpty && histResp.body != 'null') {
-                final points = jsonDecode(histResp.body);
-                if (points is Map) {
-                  final entries = points.entries.toList()
-                    ..sort((a, b) {
+              if (histResp.statusCode == 200) {
+                if (histResp.body.isEmpty || histResp.body == 'null') {
+                  for (final r in records) {
+                    if (r['device_id'] == devKey) {
+                      r['_historyCleared'] = true;
+                    }
+                  }
+                } else {
+                  final points = jsonDecode(histResp.body);
+                  if (points is Map) {
+                    final entries = points.entries.toList()
+                      ..sort((a, b) {
                       final aMap = a.value is Map ? a.value as Map : const {};
                       final bMap = b.value is Map ? b.value as Map : const {};
                       final aEpoch = int.tryParse((aMap['epoch'] ?? aMap['created_at'] ?? '').toString()) ?? 0;
@@ -113,8 +120,9 @@ class BackendService {
                   }
                 }
               }
-            } catch (_) {}
-          }
+            }
+          } catch (_) {}
+        }
 
           if (records.isNotEmpty) {
             return records;

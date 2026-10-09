@@ -212,7 +212,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onRefresh: () async {
           await ConnectivityService().checkConnection();
           if (ConnectivityService().isOnline) {
-            await HiveService().refreshFromCloud();
+            await HiveService().refreshFromCloud(notify: false);
           }
           final records = await BackendService().fetchTelemetryRecords(limit: 20);
           HiveService().updateFromBackendTelemetry(records);
@@ -261,7 +261,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           onTap: () async {
                             await ConnectivityService().checkConnection();
                             if (ConnectivityService().isOnline) {
-                              await HiveService().refreshFromCloud();
+                              await HiveService().refreshFromCloud(notify: false);
                             }
                             final records = await BackendService().fetchTelemetryRecords(limit: 20);
                             HiveService().updateFromBackendTelemetry(records);
