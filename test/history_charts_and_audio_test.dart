@@ -46,7 +46,7 @@ void main() {
       // Check titles exist
       expect(find.text('Temperature History (°C)'), findsOneWidget);
       expect(find.text('Relative Humidity (%)'), findsOneWidget);
-      expect(find.text('Acoustic Energy & Frequency (dB)'), findsOneWidget);
+      expect(find.text('Acoustic Frequency History (Hz)'), findsOneWidget);
 
       // Check average temperature is correctly calculated (~34.5°C)
       expect(find.text('Avg: 34.5°C'), findsOneWidget);
@@ -186,6 +186,64 @@ void main() {
       expect(formatTime(clipJustNow), 'Just now');
       expect(formatTime(clipMins), '15 mins ago');
       expect(formatTime(clipHours), '2 hrs ago');
+    });
+
+    testWidgets('7 Days and 30 Days display 1 daily average bar when only 1 day of data exists', (tester) async {
+      final hive = HiveData(
+        id: 'hive_single_day_avg',
+        name: 'Single Day Hive',
+        conditionLabel: 'Queen Present',
+        confidence: 96,
+        healthScore: 92,
+        temperature: '35.0',
+        humidity: '64',
+        acoustic: '150 Hz',
+        updated: '07:50 PM',
+        isAlert: false,
+        alertMessage: 'Normal',
+        temperatureHistory: [33.0, 34.0, 35.0],
+        humidityHistory: [60.0, 62.0, 64.0],
+        acousticHistory: [130.0, 140.0, 150.0],
+        historyDates: [
+          '10:05 AM\nOct 11',
+          '02:30 PM\nOct 11',
+          '07:50 PM\nOct 11',
+        ],
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: InteractiveHistoryView(hive: hive),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // In 24 Hours (default), all 3 readings from Oct 11 are shown as 3 bars
+      var tempChart = tester.widgetList<BarChart>(find.byType(BarChart)).first;
+      expect(tempChart.data.barGroups.length, 3);
+
+      // Tap "7 Days"
+      await tester.tap(find.text('7 Days'));
+      await tester.pumpAndSettle();
+
+      tempChart = tester.widgetList<BarChart>(find.byType(BarChart)).first;
+      expect(tempChart.data.barGroups.length, 1);
+      expect(tempChart.data.barGroups.first.barRods.first.toY, 34.0);
+      expect(find.text('Avg: 34.0°C'), findsOneWidget);
+      expect(find.text('Avg: 62%'), findsOneWidget);
+      expect(find.text('Avg: 140 Hz'), findsOneWidget);
+
+      // Tap "30 Days"
+      await tester.tap(find.text('30 Days'));
+      await tester.pumpAndSettle();
+
+      tempChart = tester.widgetList<BarChart>(find.byType(BarChart)).first;
+      expect(tempChart.data.barGroups.length, 1);
+      expect(tempChart.data.barGroups.first.barRods.first.toY, 34.0);
     });
   });
 }

@@ -169,9 +169,10 @@ class AlertService extends ChangeNotifier {
       final raw = prefs.getString('beeware_cached_alerts');
       if (raw != null && raw.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(raw);
+        final cutoffDt = DateTime(2026, 10, 9);
         final cached = decoded
             .map((item) => AlertModel.fromJson(Map<String, dynamic>.from(item as Map)))
-            .where((a) => !_dismissedAlertIds.contains(a.id))
+            .where((a) => !_dismissedAlertIds.contains(a.id) && !a.timestamp.isBefore(cutoffDt))
             .toList();
         if (cached.isNotEmpty) {
           _alerts = cached;
@@ -281,10 +282,12 @@ class AlertService extends ChangeNotifier {
       return false;
     }
 
-    // 1. Process Firestore stream alerts if available
+    // 1. Process Firestore stream alerts if available (only from October 9, 2026 onward)
+    final oct9CutoffDt = DateTime(2026, 10, 9);
     if (rawFirestoreAlerts != null && rawFirestoreAlerts.isNotEmpty) {
       for (final map in rawFirestoreAlerts) {
         final alert = AlertModel.fromMap(map, map['id']);
+        if (alert.timestamp.isBefore(oct9CutoffDt)) continue;
         if (!seenIds.contains(alert.id) && !isAlertResolved(alert)) {
           seenIds.add(alert.id);
           result.add(alert);

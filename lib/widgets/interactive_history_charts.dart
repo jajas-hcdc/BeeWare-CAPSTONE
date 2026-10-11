@@ -19,7 +19,7 @@ class InteractiveHistoryView extends StatefulWidget {
 }
 
 class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
-  int _selectedTimeframe = 1; // 0: 24H, 1: 7D, 2: 30D
+  int _selectedTimeframe = 0; // 0: 24H, 1: 7D, 2: 30D
   final List<String> _timeframeLabels = ['24 Hours', '7 Days', '30 Days'];
   Timer? _clockTimer;
 
@@ -60,44 +60,44 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     setState(() {});
   }
 
-  /// Generate a step-back label for the given [stepsAgo] based on timeframe.
-  /// timeframe 0 = 24H (hours), 1 = 7D (days), 2 = 30D (days).
-  String _stepLabel(int stepsAgo, int timeframe) {
+  static const List<String> _shortMonths = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  String _formatDateTimeForTimeframe(DateTime dt, int timeframe) {
+    final mon = _shortMonths[dt.month - 1];
+    final day = dt.day.toString().padLeft(2, '0');
     if (timeframe == 0) {
-      // 24 Hours — step in hours
-      return '-${stepsAgo}h';
-    } else if (timeframe == 1) {
-      // 7 Days — step in days
-      return '-${stepsAgo}d';
+      final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final hrStr = hour12.toString().padLeft(2, '0');
+      final minStr = dt.minute.toString().padLeft(2, '0');
+      final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+      // 24 Hours: emphasize 12-hour time with AM/PM on top, date below
+      return '$hrStr:$minStr $ampm\n$mon $day';
     } else {
-      // 30 Days — step in days back
-      return '-${stepsAgo}d';
+      // 7 Days & 30 Days: 1 bar per day labeled with the date
+      return '$mon $day';
     }
   }
 
-  String _latestLabel(int timeframe) {
-    if (timeframe == 0) return 'Now';
-    return 'Today';
-  }
-
-  /// Synchronized historical dataset ensuring Temperature, Humidity, Acoustic,
-  /// and X-axis date labels always share the exact same length and timeline.
+  /// Synchronized historical dataset combining full-day telemetry history and
+  /// Recent Hive Buzz Recordings in chronological order.
   ({
     List<double> temps,
     List<double> hums,
     List<double> acoustics,
     List<String> dates,
   }) get _syncedHistoryData {
+    final recordings = AudioService().getCachedRecordings(_liveHive.deviceId);
     final curTemp = double.tryParse(_liveHive.temperature.replaceAll('°C', '').trim());
     final curHum = double.tryParse(_liveHive.humidity.replaceAll('%', '').trim());
     final rawAc = double.tryParse(_liveHive.acoustic.replaceAll('Hz', '').trim());
-    final curAc = (rawAc != null && rawAc > 0)
-        ? (rawAc > 100.0 ? (rawAc / 5.0).clamp(20.0, 72.0) : rawAc)
-        : null;
+    final curAc = (rawAc != null && rawAc > 0) ? rawAc : null;
 
-    final hasTemps = _liveHive.temperatureHistory.isNotEmpty || curTemp != null;
-    final hasHums = _liveHive.humidityHistory.isNotEmpty || curHum != null;
-    final hasAcoustic = _liveHive.acousticHistory.isNotEmpty || curAc != null;
+    final hasTemps = _liveHive.temperatureHistory.isNotEmpty || curTemp != null || recordings.isNotEmpty;
+    final hasHums = _liveHive.humidityHistory.isNotEmpty || curHum != null || recordings.isNotEmpty;
+    final hasAcoustic = _liveHive.acousticHistory.isNotEmpty || curAc != null || recordings.isNotEmpty;
 
     if (!hasTemps && !hasHums && !hasAcoustic) {
       return (temps: <double>[], hums: <double>[], acoustics: <double>[], dates: <String>[]);
@@ -108,79 +108,177 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     var rawAcoustics = List<double>.from(_liveHive.acousticHistory);
     var rawDates = List<String>.from(_liveHive.historyDates);
 
-    final curDate = (_liveHive.updated.isNotEmpty && !_liveHive.updated.toLowerCase().contains('connect'))
-        ? _liveHive.updated
-        : _latestLabel(_selectedTimeframe);
+    final fallbackEpoch = _liveHive.lastAudioCreatedAt ?? DateTime.now().millisecondsSinceEpoch;
+    final curDateLabel = HiveService.formatEpochToHistoryLabel(
+      fallbackEpoch,
+      fallbackTs: _liveHive.lastAudioRecordedTime,
+    );
 
-    if (rawTemps.isEmpty && curTemp != null) rawTemps = [curTemp];
-    if (rawHums.isEmpty && curHum != null) rawHums = [curHum];
-    if (rawAcoustics.isEmpty && curAc != null) rawAcoustics = [curAc];
-    if (rawDates.isEmpty) rawDates = [curDate];
+    if (recordings.isEmpty) {
+      if (rawTemps.isEmpty && curTemp != null) rawTemps = [curTemp];
+      if (rawHums.isEmpty && curHum != null) rawHums = [curHum];
+      if (rawAcoustics.isEmpty && curAc != null) rawAcoustics = [curAc];
+      if (rawDates.isEmpty) rawDates = [curDateLabel];
+    }
 
-    // Find the max length across all sensor series to synchronize their timelines
     int maxLen = [rawTemps.length, rawHums.length, rawAcoustics.length, rawDates.length].reduce(max);
-    if (maxLen == 0) {
+
+    if (maxLen > 0) {
+      while (rawTemps.length < maxLen) {
+        rawTemps.insert(0, rawTemps.isNotEmpty ? rawTemps.first : (curTemp ?? 34.0));
+      }
+      while (rawHums.length < maxLen) {
+        rawHums.insert(0, rawHums.isNotEmpty ? rawHums.first : (curHum ?? 60.0));
+      }
+      while (rawAcoustics.length < maxLen) {
+        rawAcoustics.insert(0, rawAcoustics.isNotEmpty ? rawAcoustics.first : (curAc ?? 110.0));
+      }
+      while (rawDates.length < maxLen) {
+        rawDates.insert(0, curDateLabel);
+      }
+    }
+
+    // Build chronological, deduplicated points with resolved GMT+8 DateTime
+    final Map<String, ({DateTime dt, double t, double h, double a})> dedupedMap = {};
+    final latestKnownDt = (_liveHive.lastAudioCreatedAt != null && _liveHive.lastAudioCreatedAt! > 1700000000000)
+        ? HiveService.epochToHiveDateTime(_liveHive.lastAudioCreatedAt!)
+        : HiveService.epochToHiveDateTime(DateTime.now().millisecondsSinceEpoch);
+
+    for (int i = 0; i < maxLen; i++) {
+      final rawLabel = rawDates[i].trim();
+      if (maxLen > 1 && (rawLabel == 'Now' || rawLabel.startsWith('-') || rawLabel.isEmpty)) {
+        continue;
+      }
+      DateTime? dt = HiveService.parseHistoryLabelToDateTime(rawLabel);
+      dt ??= latestKnownDt.subtract(Duration(minutes: (maxLen - 1 - i) * 5));
+      if (HiveService.isBeforeIotStartDate(dt)) {
+        continue;
+      }
+
+      double aVal = rawAcoustics[i];
+      if (aVal > 0 && aVal <= 55.0 && (curAc == null || curAc >= 75.0)) {
+        aVal = aVal * 5.0;
+      }
+
+      final key = '${dt.year}-${dt.month}-${dt.day}-${dt.hour}-${dt.minute}';
+      dedupedMap[key] = (
+        dt: dt,
+        t: rawTemps[i],
+        h: rawHums[i],
+        a: aVal,
+      );
+    }
+
+    // Merge Recent Hive Buzz Recordings so every clip shown in the list is reflected in the charts
+    if (recordings.isNotEmpty) {
+      final chronologicalClips = recordings.reversed.toList();
+      for (int i = 0; i < chronologicalClips.length; i++) {
+        final clip = chronologicalClips[i];
+        DateTime? dt;
+        int epoch = clip.createdAt;
+        if (epoch > 0 && epoch < 1700000000000 && epoch >= 1700000000) {
+          epoch *= 1000;
+        }
+        if (epoch > 1700000000000) {
+          dt = HiveService.epochToHiveDateTime(epoch);
+        } else {
+          final combined = clip.formattedRecordedDate.isNotEmpty
+              ? '${clip.formattedRecordedDate}, ${clip.formattedRecordedTime}'
+              : clip.formattedRecordedTime;
+          dt = HiveService.parseHistoryLabelToDateTime(combined);
+        }
+        dt ??= HiveService.epochToHiveDateTime(DateTime.now().millisecondsSinceEpoch)
+            .subtract(Duration(minutes: (chronologicalClips.length - 1 - i) * 5));
+        if (HiveService.isBeforeIotStartDate(dt)) {
+          continue;
+        }
+
+        final key = '${dt.year}-${dt.month}-${dt.day}-${dt.hour}-${dt.minute}';
+        dedupedMap[key] = (
+          dt: dt,
+          t: clip.temperature,
+          h: clip.humidity,
+          a: clip.frequency.toDouble(),
+        );
+      }
+    }
+
+    var sortedPoints = dedupedMap.values.toList()
+      ..sort((a, b) => a.dt.compareTo(b.dt));
+
+    if (sortedPoints.isEmpty) {
       return (temps: <double>[], hums: <double>[], acoustics: <double>[], dates: <String>[]);
     }
 
-    // Align all lists to maxLen so they share identical indices
-    while (rawTemps.length < maxLen) {
-      rawTemps.insert(0, rawTemps.isNotEmpty ? rawTemps.first : (curTemp ?? 34.0));
-    }
-    while (rawHums.length < maxLen) {
-      rawHums.insert(0, rawHums.isNotEmpty ? rawHums.first : (curHum ?? 60.0));
-    }
-    while (rawAcoustics.length < maxLen) {
-      rawAcoustics.insert(0, rawAcoustics.isNotEmpty ? rawAcoustics.first : (curAc ?? 55.0));
-    }
-    while (rawDates.length < maxLen) {
-      rawDates.insert(0, '');
+    final refEnd = sortedPoints.last.dt;
+    final Duration maxAge = _selectedTimeframe == 0
+        ? const Duration(hours: 24)
+        : (_selectedTimeframe == 1 ? const Duration(days: 7) : const Duration(days: 30));
+
+    final filteredPoints = sortedPoints.where((p) => refEnd.difference(p.dt) <= maxAge).toList();
+    if (filteredPoints.isNotEmpty) {
+      sortedPoints = filteredPoints;
     }
 
-    // Timeframe slicing (0: 24H -> 12 points, 1: 7D -> 20 points, 2: 30D -> 30 points)
-    final int sliceLimit = _selectedTimeframe == 0 ? 12 : (_selectedTimeframe == 1 ? 20 : 30);
-    if (maxLen > sliceLimit) {
-      final start = maxLen - sliceLimit;
-      rawTemps = rawTemps.sublist(start);
-      rawHums = rawHums.sublist(start);
-      rawAcoustics = rawAcoustics.sublist(start);
-      rawDates = rawDates.sublist(start);
-      maxLen = sliceLimit;
-    }
+    final finalTemps = <double>[];
+    final finalHums = <double>[];
+    final finalAcoustics = <double>[];
+    final finalDates = <String>[];
 
-    // Pad single reading to 6 bars so the chart is scrollable & displays nicely
-    if (maxLen == 1) {
-      final t = rawTemps[0];
-      final h = rawHums[0];
-      final a = rawAcoustics[0];
-      final d = rawDates[0].isNotEmpty ? rawDates[0] : _latestLabel(_selectedTimeframe);
-      rawTemps = [t, t, t, t, t, t];
-      rawHums = [h, h, h, h, h, h];
-      rawAcoustics = [a, a, a, a, a, a];
-      rawDates = [
-        _stepLabel(5, _selectedTimeframe),
-        _stepLabel(4, _selectedTimeframe),
-        _stepLabel(3, _selectedTimeframe),
-        _stepLabel(2, _selectedTimeframe),
-        _stepLabel(1, _selectedTimeframe),
-        d,
-      ];
+    if (_selectedTimeframe == 0) {
+      // 24 Hours: individual readings across the day (AM to PM)
+      if (sortedPoints.length > 35) {
+        sortedPoints = sortedPoints.sublist(sortedPoints.length - 35);
+      }
+      for (final p in sortedPoints) {
+        finalTemps.add(p.t);
+        finalHums.add(p.h);
+        finalAcoustics.add(p.a);
+        finalDates.add(_formatDateTimeForTimeframe(p.dt, 0));
+      }
     } else {
-      final latest = rawDates.last.isNotEmpty ? rawDates.last : _latestLabel(_selectedTimeframe);
-      rawDates[rawDates.length - 1] = latest;
-      for (int i = rawDates.length - 2; i >= 0; i--) {
-        if (rawDates[i].isEmpty || rawDates[i] == 'Now') {
-          final stepsAgo = rawDates.length - 1 - i;
-          rawDates[i] = _stepLabel(stepsAgo, _selectedTimeframe);
-        }
+      // 7 Days & 30 Days: group by calendar day into 1 daily average bar per day
+      final Map<String, List<({DateTime dt, double t, double h, double a})>> byDay = {};
+      for (final p in sortedPoints) {
+        final dayKey =
+            '${p.dt.year}-${p.dt.month.toString().padLeft(2, '0')}-${p.dt.day.toString().padLeft(2, '0')}';
+        byDay.putIfAbsent(dayKey, () => []).add(p);
+      }
+
+      var dayKeys = byDay.keys.toList()..sort();
+      final int maxDays = _selectedTimeframe == 1 ? 7 : 30;
+      if (dayKeys.length > maxDays) {
+        dayKeys = dayKeys.sublist(dayKeys.length - maxDays);
+      }
+
+      for (final dayKey in dayKeys) {
+        final dayPoints = byDay[dayKey]!;
+        final validT = dayPoints.where((p) => p.t > 0.0).map((p) => p.t).toList();
+        final validH = dayPoints.where((p) => p.h > 0.0).map((p) => p.h).toList();
+        final validA = dayPoints.where((p) => p.a > 0.0).map((p) => p.a).toList();
+
+        final avgT = validT.isNotEmpty
+            ? double.parse((validT.reduce((a, b) => a + b) / validT.length).toStringAsFixed(1))
+            : dayPoints.last.t;
+        final avgH = validH.isNotEmpty
+            ? double.parse((validH.reduce((a, b) => a + b) / validH.length).toStringAsFixed(1))
+            : dayPoints.last.h;
+        final avgA = validA.isNotEmpty
+            ? (validA.reduce((a, b) => a + b) / validA.length).roundToDouble()
+            : dayPoints.last.a;
+
+        finalTemps.add(avgT);
+        finalHums.add(avgH);
+        finalAcoustics.add(avgA);
+        finalDates.add(_formatDateTimeForTimeframe(dayPoints.last.dt, _selectedTimeframe));
       }
     }
 
     return (
-      temps: hasTemps ? rawTemps : <double>[],
-      hums: hasHums ? rawHums : <double>[],
-      acoustics: hasAcoustic ? rawAcoustics : <double>[],
-      dates: rawDates,
+      temps: hasTemps ? finalTemps : <double>[],
+      hums: hasHums ? finalHums : <double>[],
+      acoustics: hasAcoustic ? finalAcoustics : <double>[],
+      dates: finalDates,
     );
   }
 
@@ -318,7 +416,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
   Widget _buildScrollableChart({
     required Widget chart,
     required int dataLength,
-    double height = 150,
+    double height = 160,
   }) {
     final bool needsScroll = dataLength >= 2;
 
@@ -335,7 +433,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     // Always make the chart wider than the viewport so it's swipable
     final screenWidth = MediaQuery.of(context).size.width;
     final availableWidth = screenWidth - 64; // minus card + screen padding
-    final perBarWidth = max(72.0, availableWidth / dataLength);
+    final perBarWidth = max(76.0, availableWidth / dataLength);
     final chartWidth = max(dataLength * perBarWidth, availableWidth + 120);
 
     return Column(
@@ -344,7 +442,9 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
         SizedBox(
           height: height,
           child: SingleChildScrollView(
+            key: ValueKey('history_scroll_${_selectedTimeframe}_$dataLength'),
             scrollDirection: Axis.horizontal,
+            reverse: true, // Start anchored at the newest (rightmost) readings
             physics: const BouncingScrollPhysics(),
             child: SizedBox(
               width: chartWidth,
@@ -358,10 +458,10 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
         const Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            Icon(Icons.swipe_left, size: 13, color: Colors.black38),
+            Icon(Icons.swipe, size: 13, color: Colors.black38),
             SizedBox(width: 4),
             Text(
-              'Swipe horizontally for more dates',
+              'Showing latest readings • Swipe right for earlier history',
               style: TextStyle(fontSize: 9, color: Colors.black45, fontWeight: FontWeight.w600),
             ),
           ],
@@ -453,9 +553,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 decoration: const BoxDecoration(color: Color(0xFF4CAF50), shape: BoxShape.circle),
               ),
               const SizedBox(width: 4),
-              const Text(
-                'Optimal Brood Nest Zone (32.0°C - 36.0°C • Alert ≤ 25.0°C / ≥ 85.0°C)',
-                style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
+              const Expanded(
+                child: Text(
+                  'Optimal Brood Nest Zone (32.0°C - 36.0°C • Alert ≤ 25.0°C / ≥ 85.0°C)',
+                  style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
+                ),
               ),
             ],
           ),
@@ -463,7 +565,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
           _buildScrollableChart(
             dataLength: temps.length,
-            height: 150,
+            height: 162,
             chart: BarChart(
               BarChartData(
                 minY: 0,
@@ -491,18 +593,24 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      reservedSize: 22,
+                      reservedSize: 32,
                       interval: 1,
                       getTitlesWidget: (val, meta) {
                         final idx = val.round();
                         if ((val - idx).abs() > 0.05) return const SizedBox.shrink();
                         if (idx < 0 || idx >= chartDates.length) return const SizedBox.shrink();
                         return Padding(
-                          padding: const EdgeInsets.only(top: 6),
+                          padding: const EdgeInsets.only(top: 5),
                           child: Text(
                             chartDates[idx],
-                            style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
-                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 8.5,
+                              color: Colors.black87,
+                              fontWeight: FontWeight.w700,
+                              height: 1.15,
+                            ),
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                         );
@@ -630,9 +738,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 decoration: const BoxDecoration(color: Color(0xFF0288D1), shape: BoxShape.circle),
               ),
               const SizedBox(width: 4),
-              const Text(
-                'Optimal Hive Humidity Zone (50% - 80%)',
-                style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
+              const Expanded(
+                child: Text(
+                  'Optimal Hive Humidity Zone (50% - 75% • Alert ≥ 85%)',
+                  style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
+                ),
               ),
             ],
           ),
@@ -640,7 +750,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
           _buildScrollableChart(
             dataLength: hums.length,
-            height: 150,
+            height: 162,
             chart: BarChart(
               BarChartData(
                 minY: 0,
@@ -668,18 +778,24 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      reservedSize: 22,
+                      reservedSize: 32,
                       interval: 1,
                       getTitlesWidget: (val, meta) {
                         final idx = val.round();
                         if ((val - idx).abs() > 0.05) return const SizedBox.shrink();
                         if (idx < 0 || idx >= chartDates.length) return const SizedBox.shrink();
                         return Padding(
-                          padding: const EdgeInsets.only(top: 6),
+                          padding: const EdgeInsets.only(top: 5),
                           child: Text(
                             chartDates[idx],
-                            style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
-                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 8.5,
+                              color: Colors.black87,
+                              fontWeight: FontWeight.w700,
+                              height: 1.15,
+                            ),
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                         );
@@ -692,10 +808,13 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 borderData: FlBorderData(show: false),
                 barGroups: List.generate(hums.length, (i) {
                   final h = hums[i];
-                  final isOptimal = h >= 50.0 && h <= 80.0;
-                  final barColor = isOptimal
-                      ? const Color(0xFF0288D1)
-                      : (h > 80.0 ? const Color(0xFF01579B) : const Color(0xFFFFB300));
+                  final isHumAlert = h >= 85.0;
+                  final isOptimal = h >= 50.0 && h <= 75.0;
+                  final barColor = isHumAlert
+                      ? const Color(0xFFD32F2F)
+                      : (isOptimal
+                          ? const Color(0xFF0288D1)
+                          : (h > 75.0 ? const Color(0xFF01579B) : const Color(0xFFFFB300)));
                   final safeToY = h.clamp(0.0, 94.0);
 
                   return BarChartGroupData(
@@ -738,7 +857,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 Icon(Icons.graphic_eq, size: 20, color: AppColors.healthyGreen),
                 SizedBox(width: 6),
                 Text(
-                  'Acoustic Energy & Frequency (dB)',
+                  'Acoustic Frequency History (Hz)',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.black),
                 ),
               ],
@@ -756,9 +875,13 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
     }
 
     final validAcoustics = acoustics.where((a) => a > 0.0).toList();
-    final avgDb = validAcoustics.isNotEmpty
-        ? (validAcoustics.map((v) => v > 100.0 ? (v / 5.0).clamp(20.0, 70.0) : v).reduce((a, b) => a + b) / validAcoustics.length).toStringAsFixed(0)
-        : (acoustics.isNotEmpty ? (acoustics.last > 100.0 ? (acoustics.last / 5.0).clamp(20.0, 70.0) : acoustics.last).toStringAsFixed(0) : '55');
+    final avgHz = validAcoustics.isNotEmpty
+        ? (validAcoustics.reduce((a, b) => a + b) / validAcoustics.length).toStringAsFixed(0)
+        : (acoustics.isNotEmpty ? acoustics.last.toStringAsFixed(0) : '0');
+
+    final maxVal = acoustics.isNotEmpty ? acoustics.reduce(max) : 260.0;
+    final double maxY = max(300.0, ((maxVal / 50).ceil() * 50).toDouble() + 50.0);
+    final double yInterval = maxY > 400 ? 100 : 50;
 
     return Container(
       padding: const EdgeInsets.all(16.0),
@@ -774,7 +897,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   Icon(Icons.graphic_eq, size: 20, color: AppColors.healthyGreen),
                   SizedBox(width: 6),
                   Text(
-                    'Acoustic Energy & Frequency (dB)',
+                    'Acoustic Frequency History (Hz)',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.black),
                   ),
                 ],
@@ -786,7 +909,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  'Avg: $avgDb dB',
+                  'Avg: $avgHz Hz',
                   style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.healthyGreen),
                 ),
               ),
@@ -801,9 +924,11 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 decoration: const BoxDecoration(color: AppColors.healthyGreen, shape: BoxShape.circle),
               ),
               const SizedBox(width: 4),
-              const Text(
-                'Normal Hive Hum Zone (40 dB - 65 dB)',
-                style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
+              const Expanded(
+                child: Text(
+                  'Normal Queenright Hum Zone (90 - 260 Hz • < 90 Hz No Buzz)',
+                  style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
+                ),
               ),
             ],
           ),
@@ -811,16 +936,16 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
           _buildScrollableChart(
             dataLength: acoustics.length,
-            height: 150,
+            height: 162,
             chart: BarChart(
               BarChartData(
                 minY: 0,
-                maxY: 80,
+                maxY: maxY,
                 alignment: acoustics.length <= 4 ? BarChartAlignment.spaceEvenly : BarChartAlignment.spaceAround,
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
-                  horizontalInterval: 20,
+                  horizontalInterval: yInterval,
                   getDrawingHorizontalLine: (value) =>
                       FlLine(color: Colors.black.withAlpha(20), strokeWidth: 1),
                 ),
@@ -828,8 +953,8 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      interval: 20,
-                      reservedSize: 28,
+                      interval: yInterval,
+                      reservedSize: 34,
                       getTitlesWidget: (val, meta) => Text(
                         '${val.toInt()}',
                         style: const TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w600),
@@ -839,18 +964,24 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      reservedSize: 22,
+                      reservedSize: 32,
                       interval: 1,
                       getTitlesWidget: (val, meta) {
                         final idx = val.round();
                         if ((val - idx).abs() > 0.05) return const SizedBox.shrink();
                         if (idx < 0 || idx >= chartDates.length) return const SizedBox.shrink();
                         return Padding(
-                          padding: const EdgeInsets.only(top: 6),
+                          padding: const EdgeInsets.only(top: 5),
                           child: Text(
                             chartDates[idx],
-                            style: const TextStyle(fontSize: 9, color: Colors.black87, fontWeight: FontWeight.w600),
-                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 8.5,
+                              color: Colors.black87,
+                              fontWeight: FontWeight.w700,
+                              height: 1.15,
+                            ),
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                         );
@@ -862,18 +993,24 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 ),
                 borderData: FlBorderData(show: false),
                 barGroups: List.generate(acoustics.length, (i) {
-                  final raw = acoustics[i];
-                  final normalized = raw > 100.0 ? (raw / 5.0).clamp(20.0, 70.0) : raw;
-                  final safeToY = normalized.clamp(0.0, 72.0);
-                  final isHigh = safeToY > 65;
+                  final hz = acoustics[i];
+                  final safeToY = hz.clamp(0.0, maxY * 0.92);
+                  final isNoBuzz = hz > 0.0 && hz < 90.0;
+                  final isHigh = hz >= 320.0;
+                  final isElevated = hz > 260.0 && hz < 320.0;
+                  final barColor = hz <= 0.0
+                      ? Colors.grey.shade400
+                      : (isNoBuzz
+                          ? const Color(0xFFD32F2F)
+                          : (isHigh
+                              ? const Color(0xFFE65100)
+                              : (isElevated ? const Color(0xFFFFB300) : AppColors.healthyGreen)));
                   return BarChartGroupData(
                     x: i,
                     barRods: [
                       BarChartRodData(
                         toY: safeToY,
-                        color: safeToY <= 0.0
-                            ? Colors.grey.shade400
-                            : (isHigh ? const Color(0xFFE65100) : AppColors.healthyGreen),
+                        color: barColor,
                         width: acoustics.length == 1 ? 24 : 14,
                         borderRadius: const BorderRadius.only(
                           topLeft: Radius.circular(4),

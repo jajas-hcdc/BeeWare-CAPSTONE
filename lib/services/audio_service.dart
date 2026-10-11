@@ -106,6 +106,7 @@ class AudioService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       final keys = prefs.getKeys().where((k) => k.startsWith('beeware_cached_audio_'));
+      final devicesToRefresh = <String>[];
       for (final key in keys) {
         final deviceId = key.replaceFirst('beeware_cached_audio_', '');
         final jsonStr = prefs.getString(key);
@@ -118,9 +119,15 @@ class AudioService extends ChangeNotifier {
                   ))
               .toList();
           _recordingsCache[deviceId] = list;
+          if (list.any((c) => c.frequency < 90)) {
+            devicesToRefresh.add(deviceId);
+          }
         }
       }
       notifyListeners();
+      for (final devId in devicesToRefresh) {
+        fetchRecordingsForDevice(devId);
+      }
     } catch (e) {
       debugPrint('Error loading cached audio recordings: $e');
     }
@@ -132,10 +139,10 @@ class AudioService extends ChangeNotifier {
       return 0;
     }
     try {
-      final now = DateTime.now();
-      int year = now.year;
-      int month = now.month;
-      int day = now.day;
+      final nowPht = HiveService.epochToHiveDateTime(DateTime.now().millisecondsSinceEpoch);
+      int year = nowPht.year;
+      int month = nowPht.month;
+      int day = nowPht.day;
 
       if (recDate != null && recDate.isNotEmpty && recDate != 'null') {
         const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -161,7 +168,9 @@ class AudioService extends ChangeNotifier {
           if (period == 'PM' && hour < 12) hour += 12;
           if (period == 'AM' && hour == 12) hour = 0;
         }
-        return DateTime(year, month, day, hour, minute, second).millisecondsSinceEpoch;
+        return DateTime.utc(year, month, day, hour, minute, second)
+            .subtract(const Duration(hours: 8))
+            .millisecondsSinceEpoch;
       }
     } catch (_) {}
     return 0;
@@ -253,6 +262,9 @@ class AudioService extends ChangeNotifier {
               }
 
               final effectiveEpoch = resolvedEpoch > 0 ? resolvedEpoch : rawCreated;
+              if (effectiveEpoch > 1700000000000 && effectiveEpoch < HiveService.kIotStartCutoffMs) {
+                continue;
+              }
               entry['createdAt'] = effectiveEpoch;
               entry['created_at'] = effectiveEpoch;
 
@@ -275,7 +287,8 @@ class AudioService extends ChangeNotifier {
       if (!rtdbReached) {
         final existingCached = _recordingsCache[cleanId] ?? [];
         for (final cached in existingCached) {
-          if (!cached.id.startsWith('telemetry_')) {
+          if (!cached.id.startsWith('telemetry_') &&
+              (cached.createdAt <= 1700000000000 || cached.createdAt >= HiveService.kIotStartCutoffMs)) {
             list.add(cached);
           }
         }
@@ -303,7 +316,9 @@ class AudioService extends ChangeNotifier {
       final cacheKey = '$cleanId:${clip.id}:${clip.createdAt}';
       final prevInferred = _inferredClipsByDevice[cacheKey];
 
-      if (prevInferred != null && prevInferred.createdAt == clip.createdAt) {
+      if (prevInferred != null &&
+          prevInferred.createdAt == clip.createdAt &&
+          (prevInferred.frequencyHz >= 90 || clip.audioBase64 == null || clip.audioBase64!.trim().isEmpty)) {
         trimmed[i] = clip.copyWith(
           frequency: prevInferred.frequencyHz,
           condition: prevInferred.condition,
@@ -336,13 +351,12 @@ class AudioService extends ChangeNotifier {
             bytes = _addWavHeader(bytes, 16000, 1, 16);
           }
           wavBytes = bytes;
-          // Always extract the true FFT honeybee fundamental (8-490 Hz) from the WAV clip when the ESP32
-          // reports < 90 Hz (sub-bass drift pulling zero-crossings below 90 Hz) OR >= 320 Hz (cricket/rain spikes)
-          if (effectiveHz < 90 || effectiveHz >= 320) {
-            final measuredHz = await AudioProcessor.computeDominantFrequencyHz(bytes);
-            if (measuredHz > 0) {
-              effectiveHz = measuredHz;
-            }
+          // Always extract the true FFT honeybee fundamental (8-490 Hz) from the WAV clip
+          // so INMP441 sub-bass zero-crossing drift (< 90 Hz) or cricket/rain spikes (>= 320 Hz)
+          // are replaced by the real acoustic spectrum peak.
+          final measuredHz = await AudioProcessor.computeDominantFrequencyHz(bytes);
+          if (measuredHz > 0) {
+            effectiveHz = measuredHz;
           }
         } catch (e) {
           debugPrint('ℹ️ ESP32 audio WAV decode skipped: $e');
@@ -407,6 +421,36 @@ class AudioService extends ChangeNotifier {
           condition: resolvedCondition,
         );
 
+        if (rtdbReached && (clip.frequency != effectiveHz || clip.condition != resolvedCondition)) {
+          http
+              .patch(
+                Uri.parse('$_firebaseRtdbUrl/audio_history/$cleanId/${clip.id}.json'),
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode({
+                  'frequency': effectiveHz,
+                  'condition': resolvedCondition,
+                }),
+              )
+              .timeout(const Duration(seconds: 4))
+              .catchError((_) => http.Response('', 500));
+
+          if (i == 0 && effectiveHz >= 90) {
+            http
+                .patch(
+                  Uri.parse('$_firebaseRtdbUrl/telemetry/$cleanId.json'),
+                  headers: {'Content-Type': 'application/json'},
+                  body: jsonEncode({
+                    'frequency': effectiveHz,
+                    'frequency_hz': effectiveHz,
+                    'acoustic': '$effectiveHz Hz',
+                    'conditionLabel': resolvedCondition,
+                  }),
+                )
+                .timeout(const Duration(seconds: 4))
+                .catchError((_) => http.Response('', 500));
+          }
+        }
+
         if (i == 0) {
           HiveService().applyAiModelPrediction(
             deviceId: cleanId,
@@ -424,6 +468,7 @@ class AudioService extends ChangeNotifier {
     }
 
     _recordingsCache[cleanId] = trimmed;
+    HiveService().syncHistoryFromRecordings(cleanId, trimmed);
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -437,7 +482,10 @@ class AudioService extends ChangeNotifier {
 
   /// Gets cached recordings for a hive device
   List<AudioRecordingModel> getCachedRecordings(String deviceId) {
-    return _recordingsCache[deviceId.trim()] ?? [];
+    final trimmedId = deviceId.trim();
+    return _recordingsCache[trimmedId] ??
+        _recordingsCache[trimmedId.toUpperCase()] ??
+        [];
   }
 
   /// Records or logs an event audio clip (e.g. Device Restart or Cooldown Cycle)

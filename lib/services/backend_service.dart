@@ -65,11 +65,11 @@ class BackendService {
               records.add(rec);
             }
           });
-          // Fetch only the latest historical telemetry points per device and auto-prune old entries for 24/7 operation
+          // Fetch historical telemetry points per device (retaining 30 days from Oct 9, 2026 onward)
           for (final devKey in data.keys) {
             try {
               final histUri = Uri.parse(
-                '$_firebaseRtdbUrl/telemetry_history/$devKey.json?orderBy=%22%24key%22&limitToLast=30',
+                '$_firebaseRtdbUrl/telemetry_history/$devKey.json',
               );
               final histResp = await http.get(histUri).timeout(const Duration(seconds: 6));
               if (histResp.statusCode == 200) {
@@ -82,47 +82,107 @@ class BackendService {
                 } else {
                   final points = jsonDecode(histResp.body);
                   if (points is Map) {
-                    final entries = points.entries.toList()
-                      ..sort((a, b) {
-                      final aMap = a.value is Map ? a.value as Map : const {};
-                      final bMap = b.value is Map ? b.value as Map : const {};
-                      final aEpoch = int.tryParse((aMap['epoch'] ?? aMap['created_at'] ?? '').toString()) ?? 0;
-                      final bEpoch = int.tryParse((bMap['epoch'] ?? bMap['created_at'] ?? '').toString()) ?? 0;
-                      if (aEpoch != bEpoch) {
-                        return aEpoch.compareTo(bEpoch);
-                      }
-                      return a.key.toString().compareTo(b.key.toString());
+                    final allEntries = points.entries.toList();
+                    const int oct9CutoffMs = 1791475200000; // Oct 9, 2026 00:00:00 +08:00
+                    final int thirtyDaysAgoMs = DateTime.now()
+                        .subtract(const Duration(days: 30))
+                        .millisecondsSinceEpoch;
+                    final int minRetainEpochMs =
+                        thirtyDaysAgoMs > oct9CutoffMs ? thirtyDaysAgoMs : oct9CutoffMs;
+
+                    final hasValidEpochEntries = allEntries.any((e) {
+                      final m = e.value is Map ? e.value as Map : const {};
+                      int ep = int.tryParse((m['epoch'] ?? m['created_at'] ?? '').toString()) ?? 0;
+                      if (ep > 0 && ep < 1700000000000 && ep >= 1700000000) ep *= 1000;
+                      return ep >= minRetainEpochMs;
                     });
-                  final recentEntries = entries.length > 25
-                      ? entries.sublist(entries.length - 25)
-                      : entries;
-                  for (final entry in recentEntries) {
-                    final point = entry.value;
-                    if (point is Map) {
-                      final p = Map<String, dynamic>.from(point);
-                      p['device_id'] = devKey;
-                      records.add(p);
+                    final entries = allEntries.where((e) {
+                      final m = e.value is Map ? e.value as Map : const {};
+                      int ep = int.tryParse((m['epoch'] ?? m['created_at'] ?? '').toString()) ?? 0;
+                      if (ep > 0 && ep < 1700000000000 && ep >= 1700000000) ep *= 1000;
+                      if (ep > 1700000000000 && ep < minRetainEpochMs) return false;
+                      if (!hasValidEpochEntries) return true;
+                      final ts = (m['timestamp'] ?? '').toString().trim();
+                      return ep >= minRetainEpochMs || (ts.isNotEmpty && ts != 'Now' && ts != 'Just now');
+                    }).toList()
+                      ..sort((a, b) {
+                        final aMap = a.value is Map ? a.value as Map : const {};
+                        final bMap = b.value is Map ? b.value as Map : const {};
+                        final aEpoch = int.tryParse((aMap['epoch'] ?? aMap['created_at'] ?? '').toString()) ?? 0;
+                        final bEpoch = int.tryParse((bMap['epoch'] ?? bMap['created_at'] ?? '').toString()) ?? 0;
+                        if (aEpoch != bEpoch) {
+                          return aEpoch.compareTo(bEpoch);
+                        }
+                        return a.key.toString().compareTo(b.key.toString());
+                      });
+                    final recentEntries = entries.length > 500
+                        ? entries.sublist(entries.length - 500)
+                        : entries;
+                    for (final entry in recentEntries) {
+                      final point = entry.value;
+                      if (point is Map) {
+                        final p = Map<String, dynamic>.from(point);
+                        p['device_id'] = devKey;
+                        records.add(p);
+                      }
                     }
-                  }
-                  // Automatically prune older entries in Firebase RTDB so /telemetry_history never grows unbounded 24/7
-                  if (entries.length > 25) {
-                    final Map<String, dynamic> prunedMap = {
-                      for (final e in recentEntries) e.key.toString(): e.value,
-                    };
-                    http
-                        .put(
-                          Uri.parse('$_firebaseRtdbUrl/telemetry_history/$devKey.json'),
-                          headers: {'Content-Type': 'application/json'},
-                          body: jsonEncode(prunedMap),
-                        )
-                        .timeout(const Duration(seconds: 4))
-                        .catchError((_) => http.Response('', 500));
+
+                    // Persist an hourly archive key (h_YYYYMMDD_HH) for the latest live reading so multi-day
+                    // 24h / 7d / 30d history is retained in Firebase RTDB beyond the ESP32's 20-slot ring buffer
+                    final devLatest = data[devKey];
+                    if (devLatest is Map) {
+                      int liveEp = int.tryParse(
+                            (devLatest['epoch'] ?? devLatest['created_at'] ?? '').toString(),
+                          ) ??
+                          0;
+                      if (liveEp > 0 && liveEp < 1700000000000 && liveEp >= 1700000000) {
+                        liveEp *= 1000;
+                      }
+                      if (liveEp >= minRetainEpochMs) {
+                        final dt = HiveService.epochToHiveDateTime(liveEp);
+                        final hourKey =
+                            'h_${dt.year}${dt.month.toString().padLeft(2, '0')}${dt.day.toString().padLeft(2, '0')}_${dt.hour.toString().padLeft(2, '0')}';
+                        if (!points.containsKey(hourKey)) {
+                          final archivePayload = {
+                            'temperature': devLatest['temperature'],
+                            'humidity': devLatest['humidity'],
+                            'battery_level': devLatest['battery_level'] ?? 100,
+                            'frequency': devLatest['frequency'] ?? devLatest['frequency_hz'] ?? 0,
+                            'epoch': liveEp,
+                            'timestamp': devLatest['timestamp'] ?? '',
+                            'recorded_date': devLatest['recorded_date'] ?? '',
+                          };
+                          http
+                              .put(
+                                Uri.parse('$_firebaseRtdbUrl/telemetry_history/$devKey/$hourKey.json'),
+                                headers: {'Content-Type': 'application/json'},
+                                body: jsonEncode(archivePayload),
+                              )
+                              .timeout(const Duration(seconds: 4))
+                              .catchError((_) => http.Response('', 500));
+                        }
+                      }
+                    }
+
+                    // Only prune entries that are invalid or older than the 30-day / Oct 9 cutoff
+                    if (allEntries.length > 500 || entries.length != allEntries.length) {
+                      final Map<String, dynamic> prunedMap = {
+                        for (final e in recentEntries) e.key.toString(): e.value,
+                      };
+                      http
+                          .put(
+                            Uri.parse('$_firebaseRtdbUrl/telemetry_history/$devKey.json'),
+                            headers: {'Content-Type': 'application/json'},
+                            body: jsonEncode(prunedMap),
+                          )
+                          .timeout(const Duration(seconds: 4))
+                          .catchError((_) => http.Response('', 500));
+                    }
                   }
                 }
               }
-            }
-          } catch (_) {}
-        }
+            } catch (_) {}
+          }
 
           if (records.isNotEmpty) {
             return records;

@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/audio_recording_model.dart';
 import '../models/hive_data.dart';
 import 'auth_service.dart';
 import 'connectivity_service.dart';
@@ -50,6 +51,61 @@ class HiveService extends ChangeNotifier {
     }
   }
 
+  /// Hard cutoff timestamp for when 24/7 IoT monitoring began (October 9, 2026 00:00:00 GMT+8)
+  static final int kIotStartCutoffMs =
+      DateTime.utc(2026, 10, 9).subtract(const Duration(hours: 8)).millisecondsSinceEpoch;
+
+  static bool isBeforeIotStartDate(DateTime phtDt) {
+    return phtDt.isBefore(DateTime(2026, 10, 9));
+  }
+
+  /// Strips any legacy undated or pre-October 9, 2026 entries from a HiveData's history arrays.
+  static HiveData _sanitizeHiveHistory(HiveData hive) {
+    if (hive.historyDates.isEmpty &&
+        hive.temperatureHistory.isEmpty &&
+        hive.humidityHistory.isEmpty &&
+        hive.acousticHistory.isEmpty) {
+      return hive.conditionTimeline.isEmpty ? hive : hive.copyWith(conditionTimeline: const []);
+    }
+
+    final minLen = [
+      hive.historyDates.length,
+      hive.temperatureHistory.length,
+      hive.humidityHistory.length,
+      hive.acousticHistory.length,
+    ].reduce(min);
+
+    final cleanDates = <String>[];
+    final cleanTemps = <double>[];
+    final cleanHums = <double>[];
+    final cleanAcoustics = <double>[];
+
+    for (int i = 0; i < minLen; i++) {
+      final d = hive.historyDates[i].trim();
+      if (!d.contains(',') || (!d.contains('AM') && !d.contains('PM'))) {
+        continue;
+      }
+      final dt = parseHistoryLabelToDateTime(d);
+      if (dt == null || isBeforeIotStartDate(dt)) {
+        continue;
+      }
+      if (!cleanDates.contains(d)) {
+        cleanDates.add(d);
+        cleanTemps.add(hive.temperatureHistory[i]);
+        cleanHums.add(hive.humidityHistory[i]);
+        cleanAcoustics.add(hive.acousticHistory[i]);
+      }
+    }
+
+    return hive.copyWith(
+      historyDates: cleanDates,
+      temperatureHistory: cleanTemps,
+      humidityHistory: cleanHums,
+      acousticHistory: cleanAcoustics,
+      conditionTimeline: const [],
+    );
+  }
+
   Future<void> _loadFromCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -59,7 +115,7 @@ class HiveService extends ChangeNotifier {
       if (raw != null && raw.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(raw);
         final cached = decoded
-            .map((item) => HiveData.fromJson(Map<String, dynamic>.from(item as Map)))
+            .map((item) => _sanitizeHiveHistory(HiveData.fromJson(Map<String, dynamic>.from(item as Map))))
             .toList();
         _hives = cached;
         notifyListeners();
@@ -92,7 +148,7 @@ class HiveService extends ChangeNotifier {
       for (var h in _hives) h.deviceId.trim().toUpperCase(): h,
     };
     final parsed = docs.map((doc) {
-      final cloudHive = HiveData.fromFirestore(doc.id, doc.data());
+      final cloudHive = _sanitizeHiveHistory(HiveData.fromFirestore(doc.id, doc.data()));
       final existing = existingMap[cloudHive.id] ??
           existingMap[cloudHive.deviceId] ??
           existingMap[cloudHive.deviceId.trim().toUpperCase()];
@@ -103,7 +159,7 @@ class HiveService extends ChangeNotifier {
               (existing.temperature != '--' || existingEpoch > 0));
 
       if (existingHasTelemetry) {
-        return cloudHive.copyWith(
+        return _sanitizeHiveHistory(cloudHive.copyWith(
           acoustic: existing.acoustic,
           acousticStatus: existing.acousticStatus,
           temperature: existing.temperature,
@@ -140,7 +196,7 @@ class HiveService extends ChangeNotifier {
           lastAudioTrigger: existing.lastAudioTrigger ?? cloudHive.lastAudioTrigger,
           lastAudioCreatedAt: existing.lastAudioCreatedAt ?? cloudHive.lastAudioCreatedAt,
           qrCodeUrl: cloudHive.qrCodeUrl ?? existing.qrCodeUrl,
-        );
+        ));
       }
       return cloudHive;
     }).toList();
@@ -432,30 +488,71 @@ class HiveService extends ChangeNotifier {
     return false;
   }
 
-  /// Parses a formatted time ("01:43:04 AM") and optional date ("Oct 03, 2026") into epoch ms
+  /// Converts a Unix epoch (ms or sec) to GMT+8 (Philippine Time, matching the ESP32 NTP clock)
+  /// regardless of the phone or emulator's local OS timezone setting.
+  static DateTime epochToHiveDateTime(int epochMs) {
+    int ms = epochMs;
+    if (ms > 0 && ms < 1700000000000 && ms >= 1700000000) {
+      ms *= 1000;
+    }
+    final pht = DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).add(const Duration(hours: 8));
+    return DateTime(pht.year, pht.month, pht.day, pht.hour, pht.minute, pht.second);
+  }
+
+  /// Converts a GMT+8 wall-clock DateTime back into an exact Unix epoch (ms).
+  static int hiveDateTimeToEpoch(DateTime phtDt) {
+    return DateTime.utc(phtDt.year, phtDt.month, phtDt.day, phtDt.hour, phtDt.minute, phtDt.second)
+        .subtract(const Duration(hours: 8))
+        .millisecondsSinceEpoch;
+  }
+
+  /// Parses a formatted time ("01:43:04 AM" or "Oct 11, 04:23 PM") and optional date ("Oct 03, 2026") into Unix epoch ms (GMT+8)
   static int _parseTimeAndDateToEpoch(String? recTime, String? recDate) {
     if (recTime == null || recTime.isEmpty || recTime == 'Just now' || recTime == 'null' || recTime == 'Now') {
       return 0;
     }
     try {
-      final now = DateTime.now();
-      int year = now.year;
-      int month = now.month;
-      int day = now.day;
+      const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+      final nowPht = epochToHiveDateTime(DateTime.now().millisecondsSinceEpoch);
+      int year = nowPht.year;
+      int month = nowPht.month;
+      int day = nowPht.day;
+      bool hasExplicitDate = false;
 
-      if (recDate != null && recDate.isNotEmpty && recDate != 'null') {
-        const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-        final cleanDate = recDate.replaceAll(',', '').trim();
-        final dateParts = cleanDate.split(RegExp(r'\s+'));
-        if (dateParts.length >= 3 && dateParts[0].length >= 3) {
-          final mIdx = months.indexOf(dateParts[0].toLowerCase().substring(0, 3));
-          if (mIdx != -1) month = mIdx + 1;
-          day = int.tryParse(dateParts[1]) ?? day;
-          year = int.tryParse(dateParts[2]) ?? year;
+      String timePortion = recTime.trim();
+      if (timePortion.contains(',')) {
+        final commaParts = timePortion.split(',');
+        final potentialDate = commaParts.first.trim();
+        final dp = potentialDate.split(RegExp(r'\s+'));
+        if (dp.length >= 2 && dp[0].length >= 3) {
+          final mIdx = months.indexOf(dp[0].toLowerCase().substring(0, 3));
+          if (mIdx != -1) {
+            month = mIdx + 1;
+            day = int.tryParse(dp[1]) ?? day;
+            if (dp.length >= 3) year = int.tryParse(dp[2]) ?? year;
+            hasExplicitDate = true;
+            timePortion = commaParts.sublist(1).join(',').trim();
+          }
         }
       }
 
-      final cleanTime = recTime.trim();
+      if (recDate != null && recDate.isNotEmpty && recDate != 'null') {
+        final cleanDate = recDate.replaceAll(',', '').trim();
+        final dateParts = cleanDate.split(RegExp(r'\s+'));
+        if (dateParts.length >= 2 && dateParts[0].length >= 3) {
+          final mIdx = months.indexOf(dateParts[0].toLowerCase().substring(0, 3));
+          if (mIdx != -1) {
+            month = mIdx + 1;
+            day = int.tryParse(dateParts[1]) ?? day;
+            if (dateParts.length >= 3) {
+              year = int.tryParse(dateParts[2]) ?? year;
+            }
+            hasExplicitDate = true;
+          }
+        }
+      }
+
+      final cleanTime = timePortion.trim();
       final timeParts = cleanTime.split(RegExp(r'\s+'));
       final hms = timeParts[0].split(':');
       if (hms.length >= 2) {
@@ -467,16 +564,61 @@ class HiveService extends ChangeNotifier {
           if (period == 'PM' && hour < 12) hour += 12;
           if (period == 'AM' && hour == 12) hour = 0;
         }
-        var parsedDt = DateTime(year, month, day, hour, minute, second);
+        var parsedUtcPlus8 = DateTime.utc(year, month, day, hour, minute, second);
+        final nowUtcPlus8 = DateTime.fromMillisecondsSinceEpoch(
+          DateTime.now().millisecondsSinceEpoch,
+          isUtc: true,
+        ).add(const Duration(hours: 8));
         // If no date was provided and the parsed time is in the future by > 5 minutes, it was from yesterday
-        if ((recDate == null || recDate.isEmpty || recDate == 'null') &&
-            parsedDt.difference(now).inMinutes > 5) {
-          parsedDt = parsedDt.subtract(const Duration(days: 1));
+        if (!hasExplicitDate && parsedUtcPlus8.difference(nowUtcPlus8).inMinutes > 5) {
+          parsedUtcPlus8 = parsedUtcPlus8.subtract(const Duration(days: 1));
         }
-        return parsedDt.millisecondsSinceEpoch;
+        return parsedUtcPlus8.subtract(const Duration(hours: 8)).millisecondsSinceEpoch;
       }
     } catch (_) {}
     return 0;
+  }
+
+  /// Formats an epoch (ms) or fallback timestamp into "MMM dd, hh:mm a" in GMT+8 (e.g., "Oct 11, 04:23 PM")
+  static String formatEpochToHistoryLabel(int epochMs, {String? fallbackTs, String? fallbackDate}) {
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    int resolvedMs = epochMs;
+    if (resolvedMs > 0 && resolvedMs < 1700000000000 && resolvedMs >= 1700000000) {
+      resolvedMs *= 1000;
+    }
+    if (resolvedMs <= 1700000000000 && fallbackTs != null && fallbackTs.isNotEmpty) {
+      resolvedMs = _parseTimeAndDateToEpoch(fallbackTs, fallbackDate);
+    }
+    if (resolvedMs > 1700000000000) {
+      final dt = epochToHiveDateTime(resolvedMs);
+      final mon = monthNames[dt.month - 1];
+      final day = dt.day.toString().padLeft(2, '0');
+      final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final hrStr = hour12.toString().padLeft(2, '0');
+      final minStr = dt.minute.toString().padLeft(2, '0');
+      final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+      return '$mon $day, $hrStr:$minStr $ampm';
+    }
+    if (fallbackTs != null && fallbackTs.trim().isNotEmpty && fallbackTs != 'Now') {
+      return fallbackTs.trim();
+    }
+    final now = epochToHiveDateTime(DateTime.now().millisecondsSinceEpoch);
+    final mon = monthNames[now.month - 1];
+    final day = now.day.toString().padLeft(2, '0');
+    final hour12 = now.hour % 12 == 0 ? 12 : now.hour % 12;
+    final hrStr = hour12.toString().padLeft(2, '0');
+    final minStr = now.minute.toString().padLeft(2, '0');
+    final ampm = now.hour >= 12 ? 'PM' : 'AM';
+    return '$mon $day, $hrStr:$minStr $ampm';
+  }
+
+  /// Parses a history label ("Oct 11, 04:23 PM" or "04:23 PM") into GMT+8 DateTime for timeframe filtering
+  static DateTime? parseHistoryLabelToDateTime(String label) {
+    final epoch = _parseTimeAndDateToEpoch(label, null);
+    if (epoch > 1700000000000) {
+      return epochToHiveDateTime(epoch);
+    }
+    return null;
   }
 
   /// Updates local hive instances with fresh SQLite telemetry data from FastAPI backend
@@ -518,6 +660,18 @@ class HiveService extends ChangeNotifier {
       return int.tryParse(val.toString()) ?? fallback;
     }
 
+    int resolveRecordEpoch(Map<String, dynamic> r) {
+      final raw = parseNumToInt(
+        r['epoch'] ?? r['last_audio_epoch'] ?? r['created_at'] ?? r['last_audio_created_at'],
+        0,
+      );
+      if (raw > 1700000000000) return raw;
+      if (raw >= 1700000000 && raw <= 4000000000) return raw * 1000;
+      final tsCandidate = (r['timestamp'] ?? r['last_audio_recorded_time'] ?? r['lastAudioRecordedTime'])?.toString();
+      final dateCandidate = (r['recorded_date'] ?? r['recordedDate'])?.toString();
+      return _parseTimeAndDateToEpoch(tsCandidate, dateCandidate);
+    }
+
     grouped.forEach((deviceId, devRecords) {
       if (devRecords.isEmpty) return;
       final latest = devRecords.first;
@@ -553,132 +707,134 @@ class HiveService extends ChangeNotifier {
         final h = parseNumToDouble(r['humidity'], 0.0);
         return t > 0.0 || h > 0.0;
       }).toList();
-      final recordsToProcess = validSensorRecords.isNotEmpty ? validSensorRecords : devRecords;
+      final rawRecordsToProcess = List<Map<String, dynamic>>.from(
+        validSensorRecords.isNotEmpty ? validSensorRecords : devRecords,
+      );
 
-      // Extract the most recent 20 records (ordered chronologically from oldest to newest)
-      final recentRecords = recordsToProcess.length > 20
-          ? recordsToProcess.sublist(recordsToProcess.length - 20)
-          : recordsToProcess;
+      // Sort chronologically from oldest to newest by resolved epoch
+      rawRecordsToProcess.sort((a, b) => resolveRecordEpoch(a).compareTo(resolveRecordEpoch(b)));
 
-      final incomingTemps = recentRecords
-          .map((r) => parseNumToDouble(r['temperature'], 0.0))
-          .toList();
-      final incomingHums = recentRecords
-          .map((r) => parseNumToDouble(r['humidity'], 0.0))
-          .toList();
-      final incomingDates = recentRecords
-          .map((r) {
-            final ts = (r['timestamp'] ?? r['created_at'] ?? '').toString();
-            if (ts.contains('_')) {
-              final parts = ts.split('_');
-              if (parts.length > 1 && parts[1].length >= 4) {
-                return '${parts[1].substring(0, 2)}:${parts[1].substring(2, 4)}';
-              }
-            } else if (ts.contains(':')) {
-              final parts = ts.split(' ');
-              String timeStr = ts;
-              if (parts.length > 1) {
-                if (parts[0].contains(':')) {
-                  timeStr = parts[0];
-                } else if (parts[1].contains(':')) {
-                  timeStr = parts[1];
-                }
-              }
-              return timeStr.length >= 5 ? timeStr.substring(0, 5) : timeStr;
-            }
-            return ts.isNotEmpty ? ts : 'Now';
-          })
-          .toList();
-      final incomingAcoustics = recentRecords
-          .map((r) {
-            final f = parseNumToDouble(r['frequency'] ?? r['frequency_hz'], 0.0);
-            if (f > 0) return (f / 5.0).clamp(20.0, 95.0);
-            final peak = parseNumToDouble(r['peak_audio'], 0.0);
-            if (peak > 0) {
-              return (peak / 50.0).clamp(20.0, 95.0);
-            }
-            return 0.0;
-          })
-          .toList();
+      // Deduplicate records that share the same formatted minute timestamp ("MMM dd, hh:mm a")
+      final Map<String, Map<String, dynamic>> dedupedByMinute = {};
+      for (final r in rawRecordsToProcess) {
+        final ep = resolveRecordEpoch(r);
+        if (ep > 1700000000000 && ep < kIotStartCutoffMs) {
+          continue;
+        }
+        final ts = (r['timestamp'] ?? r['last_audio_recorded_time'] ?? r['created_at'])?.toString();
+        final dtStr = (r['recorded_date'] ?? r['recordedDate'])?.toString();
+        if ((ts == 'Now' || ts == 'Just now') && ep == 0 && rawRecordsToProcess.length > 1) {
+          continue;
+        }
+        final label = formatEpochToHistoryLabel(ep, fallbackTs: ts, fallbackDate: dtStr);
+        dedupedByMinute[label] = r;
+      }
 
-      // Merge incoming data with existing history (append new, deduplicate, cap at 50 points)
-      const int maxHistoryPoints = 50;
+      final dedupedEntries = dedupedByMinute.entries.toList();
+      final recentEntries = dedupedEntries.length > 500
+          ? dedupedEntries.sublist(dedupedEntries.length - 500)
+          : dedupedEntries;
+
+      final cleanDevId = deviceId.trim().toUpperCase();
+      final cachedClips = AudioService().getCachedRecordings(deviceId);
+      final bool isHistoryCleared = latest['_historyCleared'] == true;
 
       // Find existing hive to get current history for merging
-      final cleanDevId = deviceId.trim().toUpperCase();
       final existingIdx = _hives.indexWhere((h) =>
           h.deviceId.trim().toUpperCase() == cleanDevId ||
           h.id.trim().toUpperCase() == cleanDevId ||
           (h.name.trim().isNotEmpty && h.name.trim().toUpperCase() == cleanDevId));
 
-      List<double> tempHist = incomingTemps;
-      List<double> humHist = incomingHums;
-      List<String> datesHist = incomingDates;
-      List<double> acousticHist = incomingAcoustics;
-      final bool isHistoryCleared = latest['_historyCleared'] == true;
+      final Map<String, ({int sortEpoch, double t, double h, double a})> combinedPoints = {};
 
+      // Retain valid dated history entries ("MMM dd, hh:mm a") from Oct 9, 2026 onward so multi-day
+      // 24/7 readings persist even after rotating out of the ESP32's 20-slot RTDB ring buffer
       if (existingIdx != -1 && !isHistoryCleared) {
         final existing = _hives[existingIdx];
-
-        // Harmonize existing history arrays to the same length
-        int existLen = [
+        final minExistingLen = [
+          existing.historyDates.length,
           existing.temperatureHistory.length,
           existing.humidityHistory.length,
           existing.acousticHistory.length,
-          existing.historyDates.length,
-        ].reduce(max);
+        ].reduce(min);
 
-        final mergedDates = List<String>.from(existing.historyDates);
-        final mergedTemps = List<double>.from(existing.temperatureHistory);
-        final mergedHums = List<double>.from(existing.humidityHistory);
-        final mergedAcoustics = List<double>.from(existing.acousticHistory);
-
-        while (mergedTemps.length < existLen) {
-          mergedTemps.insert(0, mergedTemps.isNotEmpty ? mergedTemps.first : temp);
-        }
-        while (mergedHums.length < existLen) {
-          mergedHums.insert(0, mergedHums.isNotEmpty ? mergedHums.first : hum);
-        }
-        while (mergedAcoustics.length < existLen) {
-          mergedAcoustics.insert(0, mergedAcoustics.isNotEmpty ? mergedAcoustics.first : 0.0);
-        }
-        while (mergedDates.length < existLen) {
-          mergedDates.insert(0, '');
-        }
-
-        // Append only new data points that aren't already in the history
-        for (int i = 0; i < incomingDates.length; i++) {
-          final dateLabel = incomingDates[i];
-          final tVal = i < incomingTemps.length ? incomingTemps[i] : temp;
-          final hVal = i < incomingHums.length ? incomingHums[i] : hum;
-          final aVal = i < incomingAcoustics.length ? incomingAcoustics[i] : 0.0;
-
-          // Skip if this timestamp already exists in history (dedup, avoid updating if label is identical)
-          if (mergedDates.isNotEmpty && mergedDates.last == dateLabel && dateLabel != 'Now' && mergedDates.length > 1) {
-            mergedTemps[mergedTemps.length - 1] = tVal;
-            mergedHums[mergedHums.length - 1] = hVal;
-            mergedAcoustics[mergedAcoustics.length - 1] = aVal;
-            continue;
+        for (int i = 0; i < minExistingLen; i++) {
+          final d = existing.historyDates[i];
+          if (d.contains(',') && (d.contains('AM') || d.contains('PM'))) {
+            final parsedDt = parseHistoryLabelToDateTime(d);
+            final ep = parsedDt != null ? hiveDateTimeToEpoch(parsedDt) : 0;
+            if (ep >= kIotStartCutoffMs) {
+              combinedPoints[d] = (
+                sortEpoch: ep,
+                t: existing.temperatureHistory[i],
+                h: existing.humidityHistory[i],
+                a: existing.acousticHistory[i],
+              );
+            }
           }
-          mergedDates.add(dateLabel);
-          mergedTemps.add(tVal);
-          mergedHums.add(hVal);
-          mergedAcoustics.add(aVal);
         }
+      }
 
-        // Cap at maxHistoryPoints, keeping all arrays strictly synced to the same start index
-        if (mergedDates.length > maxHistoryPoints) {
-          final start = mergedDates.length - maxHistoryPoints;
-          datesHist = mergedDates.sublist(start);
-          tempHist = mergedTemps.sublist(start);
-          humHist = mergedHums.sublist(start);
-          acousticHist = mergedAcoustics.sublist(start);
-        } else {
-          datesHist = mergedDates;
-          tempHist = mergedTemps;
-          humHist = mergedHums;
-          acousticHist = mergedAcoustics;
+      for (final entry in recentEntries) {
+        final dateLabel = entry.key;
+        final r = entry.value;
+        final tVal = parseNumToDouble(r['temperature'], 0.0);
+        final hVal = parseNumToDouble(r['humidity'], 0.0);
+        double freqVal = parseNumToDouble(r['frequency'] ?? r['frequency_hz'], 0.0);
+        if (freqVal <= 0) {
+          final peak = parseNumToDouble(r['peak_audio'], 0.0);
+          if (peak > 60) {
+            freqVal = (peak / 6500.0).round().clamp(12, 88).toDouble();
+          }
         }
+        final ep = resolveRecordEpoch(r);
+        final parsedDt = ep <= 0 ? parseHistoryLabelToDateTime(dateLabel) : null;
+        final resolvedEp = ep > 0 ? ep : (parsedDt != null ? hiveDateTimeToEpoch(parsedDt) : 0);
+        if (resolvedEp > 1700000000000 && resolvedEp < kIotStartCutoffMs) continue;
+        combinedPoints[dateLabel] = (sortEpoch: resolvedEp, t: tVal, h: hVal, a: freqVal);
+      }
+
+      if (cachedClips.isNotEmpty) {
+        for (final clip in cachedClips.reversed) {
+          final clipLabel = formatEpochToHistoryLabel(
+            clip.createdAt,
+            fallbackTs: clip.formattedRecordedTime,
+            fallbackDate: clip.formattedRecordedDate,
+          );
+          int ep = clip.createdAt;
+          if (ep > 0 && ep < 1700000000000 && ep >= 1700000000) ep *= 1000;
+          final parsedDt = ep <= 1700000000000 ? parseHistoryLabelToDateTime(clipLabel) : null;
+          final resolvedEp = ep > 1700000000000
+              ? ep
+              : (parsedDt != null ? hiveDateTimeToEpoch(parsedDt) : 0);
+          if (resolvedEp > 1700000000000 && resolvedEp < kIotStartCutoffMs) continue;
+          combinedPoints[clipLabel] = (
+            sortEpoch: resolvedEp,
+            t: clip.temperature,
+            h: clip.humidity,
+            a: clip.frequency.toDouble(),
+          );
+        }
+      }
+
+      final sortedCombined = combinedPoints.entries.toList()
+        ..sort((a, b) => a.value.sortEpoch.compareTo(b.value.sortEpoch));
+
+      const int maxHistoryPoints = 500;
+      final cappedCombined = sortedCombined.length > maxHistoryPoints
+          ? sortedCombined.sublist(sortedCombined.length - maxHistoryPoints)
+          : sortedCombined;
+
+      final List<String> datesHist = <String>[];
+      final List<double> tempHist = <double>[];
+      final List<double> humHist = <double>[];
+      final List<double> acousticHist = <double>[];
+
+      for (final entry in cappedCombined) {
+        datesHist.add(entry.key);
+        tempHist.add(entry.value.t);
+        humHist.add(entry.value.h);
+        acousticHist.add(entry.value.a);
       }
 
       // Extract acoustic frequency (Hz)
@@ -700,13 +856,19 @@ class HiveService extends ChangeNotifier {
       );
       final bool hasVerifiedClipForTelemetry = cachedPred != null &&
           cachedPred.frequencyHz >= 90 &&
-          ((rawEpoch > 1700000000000 && cachedPred.epoch >= rawEpoch) ||
+          ((rawEpoch > 1700000000000 && (rawEpoch - cachedPred.epoch).abs() <= 10 * 60 * 1000) ||
               (rawLastAudioRecTime != null &&
                   rawLastAudioRecTime.isNotEmpty &&
                   rawLastAudioRecTime == cachedPred.recordedTime));
       if (freqHz > 0 && (freqHz >= 90 || hasVerifiedClipForTelemetry) && cachedPred != null && cachedPred.frequencyHz >= 90) {
         // Prefer the verified TFLite/FFT audio clip frequency over unverified ESP32 zero-crossing readings
         freqHz = cachedPred.frequencyHz;
+      } else if (freqHz > 0 &&
+          freqHz < 90 &&
+          cachedClips.isNotEmpty &&
+          cachedClips.first.frequency >= 90 &&
+          (rawEpoch == 0 || (rawEpoch - cachedClips.first.createdAt).abs() <= 10 * 60 * 1000)) {
+        freqHz = cachedClips.first.frequency;
       } else if (freqHz <= 0) {
         final cachedHz = cachedPred?.frequencyHz ?? 0;
         if (cachedHz > 0) {
@@ -893,6 +1055,10 @@ class HiveService extends ChangeNotifier {
                         ? 'Acoustic frequency ($freqHz Hz) indicates Queenless Roar. Urgent frame inspection needed.'
                         : existing.explanation)));
 
+        if (acousticHist.isNotEmpty && freqHz > 0) {
+          acousticHist[acousticHist.length - 1] = freqHz.toDouble();
+        }
+
         _hives[index] = existing.copyWith(
           conditionLabel: effectiveCond,
           explanation: explanationText,
@@ -931,6 +1097,7 @@ class HiveService extends ChangeNotifier {
           temperatureHistory: tempHist.isNotEmpty ? tempHist : existing.temperatureHistory,
           humidityHistory: humHist.isNotEmpty ? humHist : existing.humidityHistory,
           acousticHistory: acousticHist.isNotEmpty ? acousticHist : existing.acousticHistory,
+          conditionTimeline: const [],
           lastAudioRecordedTime: lastAudioRecTime ?? existing.lastAudioRecordedTime,
           lastAudioTrigger: lastAudioTrig ?? existing.lastAudioTrigger,
           lastAudioCreatedAt: telemetryEpoch > 0 ? telemetryEpoch : (lastAudioEpoch > 0 ? lastAudioEpoch : existing.lastAudioCreatedAt),
@@ -1047,6 +1214,91 @@ class HiveService extends ChangeNotifier {
     }
   }
 
+  /// Synchronizes a hive's temperature, humidity, acoustic frequency, and timestamp history
+  /// with its verified Recent Hive Buzz Recordings while preserving full-day telemetry history.
+  void syncHistoryFromRecordings(String deviceId, List<AudioRecordingModel> recordings) {
+    final cleanDevId = deviceId.trim().toUpperCase();
+    if (cleanDevId.isEmpty || recordings.isEmpty) return;
+
+    final index = _hives.indexWhere((h) =>
+        h.deviceId.trim().toUpperCase() == cleanDevId ||
+        h.id.trim().toUpperCase() == cleanDevId ||
+        h.name.trim().toUpperCase() == cleanDevId);
+    if (index == -1) return;
+
+    final existing = _hives[index];
+    final Map<String, ({int sortEpoch, double t, double h, double a})> combinedPoints = {};
+
+    final minLen = [
+      existing.historyDates.length,
+      existing.temperatureHistory.length,
+      existing.humidityHistory.length,
+      existing.acousticHistory.length,
+    ].reduce(min);
+
+    for (int i = 0; i < minLen; i++) {
+      final d = existing.historyDates[i];
+      if (d.contains(',') && (d.contains('AM') || d.contains('PM'))) {
+        final parsedDt = parseHistoryLabelToDateTime(d);
+        final ep = parsedDt != null ? hiveDateTimeToEpoch(parsedDt) : 0;
+        if (ep >= kIotStartCutoffMs) {
+          combinedPoints[d] = (
+            sortEpoch: ep,
+            t: existing.temperatureHistory[i],
+            h: existing.humidityHistory[i],
+            a: existing.acousticHistory[i],
+          );
+        }
+      }
+    }
+
+    for (final clip in recordings.reversed) {
+      final label = formatEpochToHistoryLabel(
+        clip.createdAt,
+        fallbackTs: clip.formattedRecordedTime,
+        fallbackDate: clip.formattedRecordedDate,
+      );
+      int ep = clip.createdAt;
+      if (ep > 0 && ep < 1700000000000 && ep >= 1700000000) ep *= 1000;
+      final parsedDt = ep <= 1700000000000 ? parseHistoryLabelToDateTime(label) : null;
+      final resolvedEp = ep > 1700000000000
+          ? ep
+          : (parsedDt != null ? hiveDateTimeToEpoch(parsedDt) : 0);
+      if (resolvedEp > 1700000000000 && resolvedEp < kIotStartCutoffMs) continue;
+      combinedPoints[label] = (
+        sortEpoch: resolvedEp,
+        t: clip.temperature,
+        h: clip.humidity,
+        a: clip.frequency.toDouble(),
+      );
+    }
+
+    final sortedEntries = combinedPoints.entries.toList()
+      ..sort((a, b) => a.value.sortEpoch.compareTo(b.value.sortEpoch));
+
+    final dates = <String>[];
+    final temps = <double>[];
+    final hums = <double>[];
+    final acoustics = <double>[];
+
+    for (final entry in sortedEntries) {
+      dates.add(entry.key);
+      temps.add(entry.value.t);
+      hums.add(entry.value.h);
+      acoustics.add(entry.value.a);
+    }
+
+    _hives[index] = existing.copyWith(
+      historyDates: dates,
+      temperatureHistory: temps,
+      humidityHistory: hums,
+      acousticHistory: acoustics,
+      conditionTimeline: const [],
+    );
+    _saveToCache();
+    _debouncedNotify();
+  }
+
   /// Clears any cached on-device AI model prediction for [deviceId] (e.g. when /audio_history is cleared).
   void clearAiModelPrediction(String deviceId) {
     final cleanDevId = deviceId.trim().toUpperCase();
@@ -1127,6 +1379,11 @@ class HiveService extends ChangeNotifier {
       condition: effectivePred,
     );
 
+    final updatedAcoustics = List<double>.from(existing.acousticHistory);
+    if (updatedAcoustics.isNotEmpty && frequencyHz > 0) {
+      updatedAcoustics[updatedAcoustics.length - 1] = frequencyHz.toDouble();
+    }
+
     _hives[index] = existing.copyWith(
       conditionLabel: effectivePred,
       confidence: isSub90NoBuzz ? 60 : confidence,
@@ -1139,6 +1396,8 @@ class HiveService extends ChangeNotifier {
           : existing.humidity,
       acoustic: '$frequencyHz Hz',
       acousticStatus: isSub90NoBuzz ? 'No Buzz ($frequencyHz Hz)' : 'Normal',
+      acousticHistory: updatedAcoustics,
+      conditionTimeline: const [],
       explanation: explanationText,
       queenPresentDetected: isPres,
       queenAbsentDetected: isAbs,

@@ -11,7 +11,7 @@ class ExportService {
   static Future<void> exportCsvReport(BuildContext context, HiveData hive) async {
     try {
       final buffer = StringBuffer();
-      buffer.writeln('Hive ID,Date/Time,Temperature (C),Humidity (%),Acoustic (dB),Queen Condition');
+      buffer.writeln('Hive ID,Date/Time,Temperature (C),Humidity (%),Acoustic (Hz),Queen Condition');
 
       final dates = hive.historyDates;
       final temps = hive.temperatureHistory;
@@ -24,8 +24,11 @@ class ExportService {
         final d = dates[i];
         final t = temps[i];
         final h = hums[i];
-        final a = acoustics[i];
-        buffer.writeln('${hive.id},$d,$t,$h,$a,${hive.conditionLabel}');
+        final a = acoustics[i].round();
+        final status = i < hive.conditionTimeline.length
+            ? (hive.conditionTimeline[i]['status'] ?? hive.conditionLabel)
+            : hive.conditionLabel;
+        buffer.writeln('${hive.id},"$d",$t,$h,$a,"$status"');
       }
 
       final tempDir = await getTemporaryDirectory();
@@ -217,7 +220,7 @@ class ExportService {
           <th>Date / Period</th>
           <th>Temp (°C)</th>
           <th>Humidity (%)</th>
-          <th>Acoustic (dB)</th>
+          <th>Acoustic (Hz)</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -227,7 +230,7 @@ class ExportService {
           <td>${hive.historyDates[i]}</td>
           <td>${i < hive.temperatureHistory.length ? hive.temperatureHistory[i] : '--'}°C</td>
           <td>${i < hive.humidityHistory.length ? hive.humidityHistory[i] : '--'}%</td>
-          <td>${i < hive.acousticHistory.length ? hive.acousticHistory[i] : '--'} dB</td>
+          <td>${i < hive.acousticHistory.length ? hive.acousticHistory[i].round() : '--'} Hz</td>
           <td>${i < hive.conditionTimeline.length ? hive.conditionTimeline[i]['status'] : hive.conditionLabel}</td>
         </tr>
         ''').join()}

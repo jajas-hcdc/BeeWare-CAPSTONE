@@ -141,20 +141,26 @@ class AudioProcessor {
 
     // If the best bin landed below 90 Hz due to INMP441 sub-bass DC drift or 60 Hz mains hum,
     // check whether the 90-490 Hz honeybee acoustic band contains audible buzzing energy.
-    final int beePresentMinBin = max(minBin, (90.0 * _nFft / sampleRate).floor());
+    // Use .ceil() so the minimum bin is strictly >= 90 Hz (bin 12 = 94 Hz at 16 kHz, not bin 11 = 86 Hz).
+    final int beePresentMinBin = max(minBin, (90.0 * _nFft / sampleRate).ceil());
     final int beePresentMaxBin = min(maxBin, (260.0 * _nFft / sampleRate).ceil());
     int rawHz = ((bestBin * sampleRate) / _nFft).round();
     if (rawHz < 90 && beePresentMinBin <= maxBin) {
       int bestBeeBin = beePresentMinBin;
       double bestBeePower = -1.0;
+      double bestWeightedScore = -1.0;
       for (int k = beePresentMinBin; k <= maxBin; k++) {
-        if (avgPower[k] > bestBeePower) {
+        // Weight by frequency bin k (+6 dB/octave pre-emphasis) so 1/f sub-bass roll-off at 94 Hz
+        // does not mask the true honeybee fundamental harmonic peak (e.g. 109-250 Hz).
+        final double weightedScore = avgPower[k] * k;
+        if (weightedScore > bestWeightedScore) {
+          bestWeightedScore = weightedScore;
           bestBeePower = avgPower[k];
           bestBeeBin = k;
         }
       }
       final double meanFrameBeePower = bestBeePower / frameCount;
-      if (meanFrameBeePower >= 1.0 && bestBeePower >= bestPower * 0.00015) {
+      if (meanFrameBeePower >= 0.5 && bestBeePower >= bestPower * 0.0001) {
         bestBin = bestBeeBin;
         bestPower = bestBeePower;
         rawHz = ((bestBin * sampleRate) / _nFft).round();
