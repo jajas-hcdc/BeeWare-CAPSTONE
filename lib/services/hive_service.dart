@@ -911,7 +911,7 @@ class HiveService extends ChangeNotifier {
         freqHz = cachedClips.first.frequency;
       } else if (freqHz <= 0) {
         final cachedHz = cachedPred?.frequencyHz ?? 0;
-        if (cachedHz > 0) {
+        if (cachedHz > 0 && cachedHz != 8) {
           freqHz = cachedHz;
         } else {
           final peakAudio = parseNumToDouble(latest['peak_audio'], 0.0);
@@ -919,6 +919,13 @@ class HiveService extends ChangeNotifier {
             // INMP441 microphone is active and detecting background signal in the 1-89 Hz (No Buzz) band
             freqHz = (peakAudio / 6500.0).round().clamp(12, 88);
           }
+        }
+      }
+      if (freqHz > 0 && freqHz <= 8 && existingIdx != -1) {
+        final existingHive = _hives[existingIdx];
+        final existingHz = int.tryParse(existingHive.acoustic.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        if (existingHz > 8) {
+          freqHz = existingHz;
         }
       }
       final bool hasAcoustic = freqHz > 0;
@@ -1362,31 +1369,40 @@ class HiveService extends ChangeNotifier {
     final cleanDevId = deviceId.trim().toUpperCase();
     if (cleanDevId.isEmpty) return;
 
-    final bool isSub90NoBuzz = frequencyHz < 90 || prediction.toLowerCase().contains('no buzz');
-    final String sanitizedPred = (frequencyHz >= 500 && prediction.toLowerCase().contains('absent'))
-        ? 'Queen Present'
-        : prediction;
-    final String effectivePred = isSub90NoBuzz ? 'No Buzz Detected' : sanitizedPred;
-    final String explanationText = isSub90NoBuzz
-        ? '⚠️ No Buzz Detected ($frequencyHz Hz is in the 0-89 Hz background floor).'
-        : 'BeeWare CNN TFLite Model (1,275-sample dataset) + INMP441 ($frequencyHz Hz) classified colony state as $effectivePred ($confidence% confidence).';
-
-    _latestModelPredictions[cleanDevId] = (
-      epoch: recordingEpoch,
-      conditionLabel: effectivePred,
-      confidence: confidence,
-      frequencyHz: frequencyHz,
-      recordedTime: recordedTime,
-      explanation: explanationText,
-    );
-
     final index = _hives.indexWhere((h) =>
         h.deviceId.trim().toUpperCase() == cleanDevId ||
         h.id.trim().toUpperCase() == cleanDevId ||
         h.name.trim().toUpperCase() == cleanDevId);
 
-    if (index == -1) return;
-    final existing = _hives[index];
+    final existing = index != -1 ? _hives[index] : null;
+
+    int effectiveHz = frequencyHz;
+    if (effectiveHz > 0 && effectiveHz <= 8 && existing != null) {
+      final existingHz = int.tryParse(existing.acoustic.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+      if (existingHz > 8) {
+        effectiveHz = existingHz;
+      }
+    }
+
+    final bool isSub90NoBuzz = effectiveHz < 90 || prediction.toLowerCase().contains('no buzz');
+    final String sanitizedPred = (effectiveHz >= 500 && prediction.toLowerCase().contains('absent'))
+        ? 'Queen Present'
+        : prediction;
+    final String effectivePred = isSub90NoBuzz ? 'No Buzz Detected' : sanitizedPred;
+    final String explanationText = isSub90NoBuzz
+        ? '⚠️ No Buzz Detected ($effectiveHz Hz is in the 0-89 Hz background floor).'
+        : 'BeeWare CNN TFLite Model (1,275-sample dataset) + INMP441 ($effectiveHz Hz) classified colony state as $effectivePred ($confidence% confidence).';
+
+    _latestModelPredictions[cleanDevId] = (
+      epoch: recordingEpoch,
+      conditionLabel: effectivePred,
+      confidence: confidence,
+      frequencyHz: effectiveHz,
+      recordedTime: recordedTime,
+      explanation: explanationText,
+    );
+
+    if (index == -1 || existing == null) return;
 
     // Do not let an older audio clip overwrite a newer live telemetry reading's state
     final int existingEpoch = existing.lastAudioCreatedAt ?? 0;
@@ -1415,13 +1431,13 @@ class HiveService extends ChangeNotifier {
     final dynamicHealth = _calculateDynamicHealthScore(
       temp: tempVal,
       hum: humVal,
-      freqHz: frequencyHz,
+      freqHz: effectiveHz,
       condition: effectivePred,
     );
 
     final updatedAcoustics = List<double>.from(existing.acousticHistory);
-    if (updatedAcoustics.isNotEmpty && frequencyHz > 0) {
-      updatedAcoustics[updatedAcoustics.length - 1] = frequencyHz.toDouble();
+    if (updatedAcoustics.isNotEmpty && effectiveHz > 0) {
+      updatedAcoustics[updatedAcoustics.length - 1] = effectiveHz.toDouble();
     }
 
     _hives[index] = existing.copyWith(
@@ -1434,8 +1450,8 @@ class HiveService extends ChangeNotifier {
       humidity: (isNewerAudioClip && humidity != null && humidity > 0.0)
           ? humidity.toStringAsFixed(0)
           : existing.humidity,
-      acoustic: '$frequencyHz Hz',
-      acousticStatus: isSub90NoBuzz ? 'No Buzz ($frequencyHz Hz)' : 'Normal',
+      acoustic: '$effectiveHz Hz',
+      acousticStatus: isSub90NoBuzz ? 'No Buzz ($effectiveHz Hz)' : 'Normal',
       acousticHistory: updatedAcoustics,
       conditionTimeline: const [],
       explanation: explanationText,
@@ -1447,9 +1463,9 @@ class HiveService extends ChangeNotifier {
       alertSeverity: isAbs ? 'Critical' : (isRej ? 'Warning' : 'Info'),
       alertLabel: isAbs ? 'Queen Absent' : (isRej ? 'Queen Rejected' : effectivePred),
       alertMessage: isAbs
-          ? 'Colony is Queenless (TFLite AI Model & $frequencyHz Hz).'
+          ? 'Colony is Queenless (TFLite AI Model & $effectiveHz Hz).'
           : (isRej
-              ? 'Colony rejecting queen (TFLite AI Model & $frequencyHz Hz).'
+              ? 'Colony rejecting queen (TFLite AI Model & $effectiveHz Hz).'
               : 'Colony is queenright and stable.'),
       recommendation: isAbs
           ? 'Inspect frames for emergency queen cells or introduce a new mated queen promptly.'

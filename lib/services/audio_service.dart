@@ -318,6 +318,7 @@ class AudioService extends ChangeNotifier {
 
       if (prevInferred != null &&
           prevInferred.createdAt == clip.createdAt &&
+          prevInferred.frequencyHz != 8 &&
           (prevInferred.frequencyHz >= 90 || clip.audioBase64 == null || clip.audioBase64!.trim().isEmpty)) {
         trimmed[i] = clip.copyWith(
           frequency: prevInferred.frequencyHz,
@@ -351,11 +352,17 @@ class AudioService extends ChangeNotifier {
             bytes = _addWavHeader(bytes, 16000, 1, 16);
           }
           wavBytes = bytes;
-          // Always extract the true FFT honeybee fundamental (8-490 Hz) from the WAV clip
-          // so INMP441 sub-bass zero-crossing drift (< 90 Hz) or cricket/rain spikes (>= 300 Hz)
-          // are replaced by the real acoustic spectrum peak.
+          // Extract the true FFT honeybee fundamental (90-490 Hz) from the WAV clip.
+          // For active buzzing (>= 90 Hz), the FFT accurately pinpoints the fundamental.
+          // For quiet / sub-90 Hz audio, FFT bin 1 (8 Hz) is a 1/f noise floor artifact;
+          // preserve the actual frequency transmitted by the ESP32 hardware device.
           final measuredHz = await AudioProcessor.computeDominantFrequencyHz(bytes);
-          if (measuredHz > 0) {
+          if (measuredHz >= 90) {
+            effectiveHz = measuredHz;
+          } else if (clip.frequency > 0 && clip.frequency != 8) {
+            // Preserve the hardware-transmitted frequency (e.g. 58 Hz, 77 Hz) for sub-90 Hz
+            effectiveHz = clip.frequency;
+          } else if (measuredHz > 0 && measuredHz != 8) {
             effectiveHz = measuredHz;
           }
         } catch (e) {
@@ -364,6 +371,21 @@ class AudioService extends ChangeNotifier {
       }
 
       if (effectiveHz < 90) {
+        // If effectiveHz ended up at <= 8 (e.g. from FFT bin 1 artifact), check what Hz is actually being transmitted
+        if (effectiveHz <= 8) {
+          if (clip.frequency > 0 && clip.frequency != 8) {
+            effectiveHz = clip.frequency;
+          } else {
+            final hive = HiveService().getHiveByDeviceId(cleanId);
+            final hiveHz = hive != null
+                ? (int.tryParse(hive.acoustic.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+                : 0;
+            if (hiveHz > 0 && hiveHz != 8) {
+              effectiveHz = hiveHz;
+            }
+          }
+        }
+
         trimmed[i] = clip.copyWith(
           frequency: effectiveHz,
           condition: 'No Buzz Detected',

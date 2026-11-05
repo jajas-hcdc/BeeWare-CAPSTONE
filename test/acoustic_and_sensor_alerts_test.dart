@@ -482,6 +482,72 @@ void main() {
       expect(lowRumble.isNoBuzzDetected, isTrue);
     });
 
+    test('sub-90 Hz transmitted frequency is preserved and displayed as transmitted Hz rather than fixed 8 Hz artifact', () {
+      final testHive = HiveData(
+        id: 'hive_sub90_farm_node',
+        name: 'Farm Node Hive',
+        deviceId: 'BW-013230',
+        conditionLabel: 'No Buzz Detected',
+        confidence: 60,
+        healthScore: 30,
+        temperature: '27.1',
+        humidity: '80',
+        acoustic: '77 Hz',
+        acousticStatus: 'No Buzz (77 Hz)',
+        updated: 'Just now',
+        isAlert: false,
+        alertLabel: 'Normal',
+        alertMessage: 'Active',
+      );
+      hiveService.addHive(testHive);
+
+      // 1. Ingest live telemetry with 77 Hz (< 90 Hz)
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-013230',
+          'temperature': 27.1,
+          'humidity': 80.8,
+          'frequency': 77,
+          'frequency_hz': 77,
+        }
+      ]);
+
+      var updated = hiveService.getHiveById('hive_sub90_farm_node');
+      expect(updated?.acoustic, '77 Hz');
+      expect(updated?.acousticStatus, 'No Buzz (77 Hz)');
+      expect(updated?.conditionLabel, 'No Buzz Detected');
+
+      // 2. An FFT Bin 1 artifact (8 Hz) from a quiet WAV clip should NOT overwrite the transmitted 77 Hz
+      hiveService.applyAiModelPrediction(
+        deviceId: 'BW-013230',
+        recordingEpoch: DateTime.now().millisecondsSinceEpoch,
+        prediction: 'No Buzz Detected',
+        confidence: 60,
+        frequencyHz: 8,
+      );
+
+      updated = hiveService.getHiveById('hive_sub90_farm_node');
+      expect(updated?.acoustic, '77 Hz');
+      expect(updated?.acousticStatus, 'No Buzz (77 Hz)');
+      expect(updated?.conditionLabel, 'No Buzz Detected');
+
+      // 3. New telemetry with 58 Hz updates cleanly to 58 Hz (not fixed 8 Hz)
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-013230',
+          'temperature': 27.5,
+          'humidity': 79.5,
+          'frequency': 58,
+          'frequency_hz': 58,
+        }
+      ]);
+
+      updated = hiveService.getHiveById('hive_sub90_farm_node');
+      expect(updated?.acoustic, '58 Hz');
+      expect(updated?.acousticStatus, 'No Buzz (58 Hz)');
+      expect(updated?.conditionLabel, 'No Buzz Detected');
+    });
+
     testWidgets('AcousticSignalVisualizer displays received Hz when 1-89 Hz classifies as No Buzz Detected', (tester) async {
       await tester.pumpWidget(
         const MaterialApp(

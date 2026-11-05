@@ -268,7 +268,13 @@ class HiveData {
     final acousticStatusRaw = (data['acousticStatus'] ?? 'Normal').toString();
     final freqVal = data['frequency'] ?? data['frequency_hz'];
     final num? parsedFreq = freqVal is num ? freqVal : num.tryParse(freqVal?.toString() ?? '');
-    final int? freqInt = parsedFreq?.toInt();
+    int? freqInt = parsedFreq?.toInt();
+    if (freqInt == null || freqInt == 0) {
+      final match = RegExp(r'(\d+)\s*Hz', caseSensitive: false).firstMatch(acousticRaw);
+      if (match != null) {
+        freqInt = int.tryParse(match.group(1)!);
+      }
+    }
 
     final bool isAcousticZero = (freqInt != null && freqInt == 0) ||
         (freqInt == null &&
@@ -376,7 +382,7 @@ class HiveData {
 
     final String resolvedAcoustic = isAcousticZero
         ? '0 Hz'
-        : ((freqInt != null && freqInt > 0 && !acousticRaw.toLowerCase().contains('hz'))
+        : (freqInt != null && freqInt > 0
             ? '$freqInt Hz'
             : acousticRaw);
     final String resolvedAcousticStatus = isAcousticZero
