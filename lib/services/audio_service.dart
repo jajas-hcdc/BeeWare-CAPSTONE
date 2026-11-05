@@ -584,7 +584,27 @@ class AudioService extends ChangeNotifier {
           // If bytes do not start with 'RIFF', prepend standard 44-byte WAV header
           if (bytes.length >= 4 &&
               !(bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46)) {
-            bytes = _addWavHeader(bytes, 22050, 1, 16);
+            // Apply peak normalization to ensure clear, audible playback on mobile phone speakers
+            if (bytes.length >= 2) {
+              int maxAmp = 0;
+              final view = ByteData.view(bytes.buffer, bytes.offsetInBytes, bytes.length);
+              final numSamples = bytes.length ~/ 2;
+              for (int sIdx = 0; sIdx < numSamples; sIdx++) {
+                final amp = view.getInt16(sIdx * 2, Endian.little).abs();
+                if (amp > maxAmp) maxAmp = amp;
+              }
+              if (maxAmp > 0 && maxAmp < 20000) {
+                final double gain = (24000.0 / maxAmp).clamp(1.0, 3.2);
+                final boosted = Uint8List(bytes.length);
+                final outView = ByteData.view(boosted.buffer);
+                for (int sIdx = 0; sIdx < numSamples; sIdx++) {
+                  final raw = view.getInt16(sIdx * 2, Endian.little);
+                  outView.setInt16(sIdx * 2, (raw * gain).round().clamp(-32768, 32767), Endian.little);
+                }
+                bytes = boosted;
+              }
+            }
+            bytes = _addWavHeader(bytes, 16000, 1, 16);
           }
 
           final file = File('${tempDir.path}/hive_clip_${clip.deviceId}_${clip.id}.wav');
@@ -648,7 +668,7 @@ class AudioService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Synthesizes a realistic 3.0s worker bee buzz audio at [frequency] Hz
+  /// Synthesizes a realistic 3.0s worker bee buzz audio at [frequency] Hz with organic colony acoustics
   Uint8List _generateBuzzWav(int frequency, double durationSec) {
     const sampleRate = 16000;
     final totalSamples = (sampleRate * durationSec).toInt();
@@ -656,14 +676,27 @@ class AudioService extends ChangeNotifier {
     final byteData = ByteData.view(pcmBytes.buffer);
 
     final f0 = frequency > 30 ? frequency.toDouble() : 180.0;
+    double b0 = 0.0, b1 = 0.0;
     for (int i = 0; i < totalSamples; i++) {
       final t = i / sampleRate;
-      // Bee acoustic harmonics: fundamental + 2nd + 3rd harmonic with gentle amplitude modulation
-      final mod = 1.0 + 0.08 * sin(2 * pi * 8.0 * t);
-      final s = (sin(2 * pi * f0 * t) * 0.6 +
-                 sin(2 * pi * (f0 * 2) * t) * 0.28 +
-                 sin(2 * pi * (f0 * 3) * t) * 0.12) * mod;
-      final sample = (s * 14000).toInt().clamp(-32768, 32767);
+      // Colony choral effect: multiple bees have slightly detuned wingbeats
+      final swarm1 = sin(2 * pi * f0 * t) * 0.45;
+      final swarm2 = sin(2 * pi * (f0 + 1.4) * t + 0.3) * 0.22;
+      final swarm3 = sin(2 * pi * (f0 - 1.1) * t + 0.7) * 0.18;
+      // Harmonics (2nd, 3rd, 4th thoracic vibrations)
+      final h2 = sin(2 * pi * (f0 * 2) * t) * 0.20;
+      final h3 = sin(2 * pi * (f0 * 3) * t + 0.5) * 0.08;
+      final h4 = sin(2 * pi * (f0 * 4) * t + 0.2) * 0.03;
+
+      // Soft wing-flutter filtered noise floor
+      final white = (((i * 1103515245 + 12345) & 0x7FFFFFFF) / 1073741824.0) - 1.0;
+      b0 = 0.96 * b0 + white * 0.04;
+      b1 = 0.92 * b1 + b0 * 0.08;
+
+      // Gentle hive acoustic envelope modulation (~5-7 Hz collective fanning wave)
+      final envelope = 1.0 + 0.06 * sin(2 * pi * 5.5 * t) + 0.04 * cos(2 * pi * 8.2 * t);
+      final s = (swarm1 + swarm2 + swarm3 + h2 + h3 + h4 + b1 * 0.15) * envelope * 0.75;
+      final sample = (s * 16000).toInt().clamp(-32768, 32767);
       byteData.setInt16(i * 2, sample, Endian.little);
     }
 
