@@ -23,6 +23,12 @@
     "alerts": {
       ".read": true,
       ".write": true
+    },
+    "ota": {
+      ".read": true,
+      "$deviceId": {
+        ".write": true
+      }
     }
   }
 }
