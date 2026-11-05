@@ -13,6 +13,11 @@ class AlertModel {
   final String detectedBy;
   final String? userId;
   final Map<String, dynamic>? additionalData;
+  final bool isResolved;
+  final DateTime? resolvedAt;
+  final String? resolvedBy;
+  final String? resolvedTimeFormatted;
+  final String? resolutionNotes;
 
   const AlertModel({
     required this.id,
@@ -26,7 +31,50 @@ class AlertModel {
     this.detectedBy = 'AI Acoustic & Sensor Model',
     this.userId,
     this.additionalData,
+    this.isResolved = false,
+    this.resolvedAt,
+    this.resolvedBy,
+    this.resolvedTimeFormatted,
+    this.resolutionNotes,
   });
+
+  AlertModel copyWith({
+    String? id,
+    String? hiveId,
+    String? queenStatus,
+    String? title,
+    String? message,
+    String? severity,
+    DateTime? timestamp,
+    String? recommendation,
+    String? detectedBy,
+    String? userId,
+    Map<String, dynamic>? additionalData,
+    bool? isResolved,
+    DateTime? resolvedAt,
+    String? resolvedBy,
+    String? resolvedTimeFormatted,
+    String? resolutionNotes,
+  }) {
+    return AlertModel(
+      id: id ?? this.id,
+      hiveId: hiveId ?? this.hiveId,
+      queenStatus: queenStatus ?? this.queenStatus,
+      title: title ?? this.title,
+      message: message ?? this.message,
+      severity: severity ?? this.severity,
+      timestamp: timestamp ?? this.timestamp,
+      recommendation: recommendation ?? this.recommendation,
+      detectedBy: detectedBy ?? this.detectedBy,
+      userId: userId ?? this.userId,
+      additionalData: additionalData ?? this.additionalData,
+      isResolved: isResolved ?? this.isResolved,
+      resolvedAt: resolvedAt ?? this.resolvedAt,
+      resolvedBy: resolvedBy ?? this.resolvedBy,
+      resolvedTimeFormatted: resolvedTimeFormatted ?? this.resolvedTimeFormatted,
+      resolutionNotes: resolutionNotes ?? this.resolutionNotes,
+    );
+  }
 
   static String deduceSeverity(String queenStatus) {
     final status = queenStatus.toLowerCase();
@@ -75,6 +123,25 @@ class AlertModel {
       parsedDate = DateTime.now();
     }
 
+    final bool isResolved = data['resolved'] == true ||
+        data['status'] == 'resolved' ||
+        (data['isResolved'] == true);
+
+    DateTime? resolvedAt;
+    if (data['resolvedAt'] != null) {
+      if (data['resolvedAt'] is int) {
+        resolvedAt = DateTime.fromMillisecondsSinceEpoch(data['resolvedAt'] as int);
+      } else if (data['resolvedAt'] is DateTime) {
+        resolvedAt = data['resolvedAt'] as DateTime;
+      } else if (data['resolvedAt'] is String) {
+        resolvedAt = DateTime.tryParse(data['resolvedAt'] as String);
+      } else {
+        try {
+          resolvedAt = (data['resolvedAt'] as dynamic).toDate();
+        } catch (_) {}
+      }
+    }
+
     return AlertModel(
       id: id ?? data['id'] ?? 'alert_${DateTime.now().millisecondsSinceEpoch}',
       hiveId: data['hiveId'] ?? data['hive_id'] ?? 'Hive 1',
@@ -87,6 +154,11 @@ class AlertModel {
       detectedBy: data['detectedBy'] ?? 'AI Multi-Sensor Acoustic Model',
       userId: data['userId'],
       additionalData: data['additional_data'] ?? data['payload'],
+      isResolved: isResolved,
+      resolvedAt: resolvedAt,
+      resolvedBy: data['resolvedBy'] as String?,
+      resolvedTimeFormatted: data['resolvedTimeFormatted'] as String?,
+      resolutionNotes: (data['resolutionNotes'] ?? data['notes']) as String?,
     );
   }
 
@@ -102,6 +174,12 @@ class AlertModel {
       'detectedBy': detectedBy,
       if (userId != null) 'userId': userId,
       if (additionalData != null) 'payload': additionalData,
+      'resolved': isResolved,
+      'status': isResolved ? 'resolved' : 'active',
+      if (resolvedAt != null) 'resolvedAt': resolvedAt!.millisecondsSinceEpoch,
+      if (resolvedBy != null) 'resolvedBy': resolvedBy,
+      if (resolvedTimeFormatted != null) 'resolvedTimeFormatted': resolvedTimeFormatted,
+      if (resolutionNotes != null) 'resolutionNotes': resolutionNotes,
     };
   }
 

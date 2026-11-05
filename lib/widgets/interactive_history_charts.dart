@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import '../models/audio_recording_model.dart';
 import '../models/hive_data.dart';
 import '../services/audio_service.dart';
 import '../services/export_service.dart';
@@ -403,10 +402,6 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
 
         // 4. AI Colony Condition Timeline
         _buildTimelineCard(),
-        const SizedBox(height: 16),
-
-        // 5. Recent Hive Audio Recordings (Last 5)
-        _buildAudioRecordingsCard(),
         const SizedBox(height: 24),
       ],
     );
@@ -566,17 +561,28 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           _buildScrollableChart(
             dataLength: temps.length,
             height: 162,
-            chart: BarChart(
-              BarChartData(
+            chart: LineChart(
+              LineChartData(
+                minX: temps.length <= 1 ? -0.5 : -0.2,
+                maxX: temps.length <= 1 ? 0.5 : (temps.length - 1).toDouble() + 0.2,
                 minY: 0,
                 maxY: maxY,
-                alignment: temps.length <= 4 ? BarChartAlignment.spaceEvenly : BarChartAlignment.spaceAround,
+                clipData: const FlClipData.none(),
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
                   horizontalInterval: 10,
                   getDrawingHorizontalLine: (value) =>
                       FlLine(color: Colors.black.withAlpha(20), strokeWidth: 1),
+                ),
+                rangeAnnotations: RangeAnnotations(
+                  horizontalRangeAnnotations: [
+                    HorizontalRangeAnnotation(
+                      y1: 32.0,
+                      y2: 36.0,
+                      color: const Color(0xFF10B981).withAlpha(25),
+                    ),
+                  ],
                 ),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
@@ -621,33 +627,59 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 ),
                 borderData: FlBorderData(show: false),
-                barGroups: List.generate(temps.length, (i) {
-                  final t = temps[i];
-                  final isOptimal = t >= 32.0 && t <= 36.0;
-                  final isTempAlert = (t > 0.0 && t <= 25.0) || t >= 85.0;
-                  final isHot = t > 36.0 && t < 85.0;
-                  final barColor = isOptimal
-                      ? AppColors.healthyGreen
-                      : (isTempAlert
-                          ? const Color(0xFFD32F2F)
-                          : (isHot ? const Color(0xFFE65100) : const Color(0xFFFFB300)));
-                  final safeToY = t.clamp(0.0, maxY * 0.92);
-
-                  return BarChartGroupData(
-                    x: i,
-                    barRods: [
-                      BarChartRodData(
-                        toY: safeToY,
-                        color: t <= 0.0 ? Colors.grey.shade400 : barColor,
-                        width: temps.length == 1 ? 24 : 14,
-                        borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(4),
-                          topRight: Radius.circular(4),
-                        ),
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) => const Color(0xFF1E293B),
+                    fitInsideHorizontally: true,
+                    fitInsideVertically: true,
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        final idx = spot.x.round();
+                        final dateStr = (idx >= 0 && idx < chartDates.length) ? chartDates[idx] : '';
+                        return LineTooltipItem(
+                          '${spot.y.toStringAsFixed(1)}°C\n$dateStr',
+                          const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: List.generate(temps.length, (i) => FlSpot(i.toDouble(), temps[i])),
+                    isCurved: temps.length > 1,
+                    curveSmoothness: 0.25,
+                    preventCurveOverShooting: true,
+                    color: const Color(0xFFF59E0B),
+                    barWidth: 2.4,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) {
+                        final t = spot.y;
+                        final isAlert = (t > 0.0 && t <= 25.0) || t >= 85.0;
+                        return FlDotCirclePainter(
+                          radius: 3.5,
+                          color: isAlert ? const Color(0xFFD32F2F) : const Color(0xFFF59E0B),
+                          strokeWidth: 1.5,
+                          strokeColor: Colors.white,
+                        );
+                      },
+                    ),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          const Color(0xFFF59E0B).withAlpha(45),
+                          const Color(0xFFF59E0B).withAlpha(5),
+                        ],
                       ),
-                    ],
-                  );
-                }),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -751,17 +783,28 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           _buildScrollableChart(
             dataLength: hums.length,
             height: 162,
-            chart: BarChart(
-              BarChartData(
+            chart: LineChart(
+              LineChartData(
+                minX: hums.length <= 1 ? -0.5 : -0.2,
+                maxX: hums.length <= 1 ? 0.5 : (hums.length - 1).toDouble() + 0.2,
                 minY: 0,
                 maxY: maxY,
-                alignment: hums.length <= 4 ? BarChartAlignment.spaceEvenly : BarChartAlignment.spaceAround,
+                clipData: const FlClipData.none(),
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
                   horizontalInterval: 25,
                   getDrawingHorizontalLine: (value) =>
                       FlLine(color: Colors.black.withAlpha(20), strokeWidth: 1),
+                ),
+                rangeAnnotations: RangeAnnotations(
+                  horizontalRangeAnnotations: [
+                    HorizontalRangeAnnotation(
+                      y1: 50.0,
+                      y2: 75.0,
+                      color: const Color(0xFF0284C7).withAlpha(25),
+                    ),
+                  ],
                 ),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
@@ -806,32 +849,59 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 ),
                 borderData: FlBorderData(show: false),
-                barGroups: List.generate(hums.length, (i) {
-                  final h = hums[i];
-                  final isHumAlert = h >= 85.0;
-                  final isOptimal = h >= 50.0 && h <= 75.0;
-                  final barColor = isHumAlert
-                      ? const Color(0xFFD32F2F)
-                      : (isOptimal
-                          ? const Color(0xFF0288D1)
-                          : (h > 75.0 ? const Color(0xFF01579B) : const Color(0xFFFFB300)));
-                  final safeToY = h.clamp(0.0, 94.0);
-
-                  return BarChartGroupData(
-                    x: i,
-                    barRods: [
-                      BarChartRodData(
-                        toY: safeToY,
-                        color: h <= 0.0 ? Colors.grey.shade400 : barColor,
-                        width: hums.length == 1 ? 24 : 14,
-                        borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(4),
-                          topRight: Radius.circular(4),
-                        ),
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) => const Color(0xFF1E293B),
+                    fitInsideHorizontally: true,
+                    fitInsideVertically: true,
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        final idx = spot.x.round();
+                        final dateStr = (idx >= 0 && idx < chartDates.length) ? chartDates[idx] : '';
+                        return LineTooltipItem(
+                          '${spot.y.toStringAsFixed(0)}%\n$dateStr',
+                          const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: List.generate(hums.length, (i) => FlSpot(i.toDouble(), hums[i])),
+                    isCurved: hums.length > 1,
+                    curveSmoothness: 0.25,
+                    preventCurveOverShooting: true,
+                    color: const Color(0xFF0284C7),
+                    barWidth: 2.4,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) {
+                        final h = spot.y;
+                        final isAlert = h >= 85.0;
+                        return FlDotCirclePainter(
+                          radius: 3.5,
+                          color: isAlert ? const Color(0xFFD32F2F) : const Color(0xFF0284C7),
+                          strokeWidth: 1.5,
+                          strokeColor: Colors.white,
+                        );
+                      },
+                    ),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          const Color(0xFF0284C7).withAlpha(45),
+                          const Color(0xFF0284C7).withAlpha(5),
+                        ],
                       ),
-                    ],
-                  );
-                }),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -937,17 +1007,38 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
           _buildScrollableChart(
             dataLength: acoustics.length,
             height: 162,
-            chart: BarChart(
-              BarChartData(
+            chart: LineChart(
+              LineChartData(
+                minX: acoustics.length <= 1 ? -0.5 : -0.2,
+                maxX: acoustics.length <= 1 ? 0.5 : (acoustics.length - 1).toDouble() + 0.2,
                 minY: 0,
                 maxY: maxY,
-                alignment: acoustics.length <= 4 ? BarChartAlignment.spaceEvenly : BarChartAlignment.spaceAround,
+                clipData: const FlClipData.none(),
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
                   horizontalInterval: yInterval,
                   getDrawingHorizontalLine: (value) =>
                       FlLine(color: Colors.black.withAlpha(20), strokeWidth: 1),
+                ),
+                rangeAnnotations: RangeAnnotations(
+                  horizontalRangeAnnotations: [
+                    HorizontalRangeAnnotation(
+                      y1: 90.0,
+                      y2: 260.0,
+                      color: const Color(0xFF10B981).withAlpha(25),
+                    ),
+                  ],
+                ),
+                extraLinesData: ExtraLinesData(
+                  horizontalLines: [
+                    HorizontalLine(
+                      y: 90.0,
+                      color: const Color(0xFFEF4444).withAlpha(150),
+                      strokeWidth: 1,
+                      dashArray: [3, 3],
+                    ),
+                  ],
                 ),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
@@ -992,34 +1083,60 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                   rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 ),
                 borderData: FlBorderData(show: false),
-                barGroups: List.generate(acoustics.length, (i) {
-                  final hz = acoustics[i];
-                  final safeToY = hz.clamp(0.0, maxY * 0.92);
-                  final isNoBuzz = hz > 0.0 && hz < 90.0;
-                  final isHigh = hz >= 320.0;
-                  final isElevated = hz > 260.0 && hz < 320.0;
-                  final barColor = hz <= 0.0
-                      ? Colors.grey.shade400
-                      : (isNoBuzz
-                          ? const Color(0xFFD32F2F)
-                          : (isHigh
-                              ? const Color(0xFFE65100)
-                              : (isElevated ? const Color(0xFFFFB300) : AppColors.healthyGreen)));
-                  return BarChartGroupData(
-                    x: i,
-                    barRods: [
-                      BarChartRodData(
-                        toY: safeToY,
-                        color: barColor,
-                        width: acoustics.length == 1 ? 24 : 14,
-                        borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(4),
-                          topRight: Radius.circular(4),
-                        ),
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) => const Color(0xFF1E293B),
+                    fitInsideHorizontally: true,
+                    fitInsideVertically: true,
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        final idx = spot.x.round();
+                        final dateStr = (idx >= 0 && idx < chartDates.length) ? chartDates[idx] : '';
+                        return LineTooltipItem(
+                          '${spot.y.toStringAsFixed(0)} Hz\n$dateStr',
+                          const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: List.generate(acoustics.length, (i) => FlSpot(i.toDouble(), acoustics[i])),
+                    isCurved: acoustics.length > 1,
+                    curveSmoothness: 0.25,
+                    preventCurveOverShooting: true,
+                    color: const Color(0xFF8B5CF6),
+                    barWidth: 2.4,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) {
+                        final hz = spot.y;
+                        final isHigh = hz >= 300.0;
+                        final isNoBuzz = hz > 0.0 && hz < 90.0;
+                        return FlDotCirclePainter(
+                          radius: 3.5,
+                          color: (isHigh || isNoBuzz) ? const Color(0xFFD32F2F) : const Color(0xFF8B5CF6),
+                          strokeWidth: 1.5,
+                          strokeColor: Colors.white,
+                        );
+                      },
+                    ),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          const Color(0xFF8B5CF6).withAlpha(50),
+                          const Color(0xFF8B5CF6).withAlpha(5),
+                        ],
                       ),
-                    ],
-                  );
-                }),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1108,312 +1225,5 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
         ],
       ),
     );
-  }
-
-  // ================= 5. RECENT HIVE AUDIO RECORDINGS (LAST 5) =================
-  Widget _buildAudioRecordingsCard() {
-    return AnimatedBuilder(
-      animation: AudioService(),
-      builder: (context, _) {
-        final audioService = AudioService();
-        final recordings = audioService.getCachedRecordings(_liveHive.deviceId);
-        final isPlaying = audioService.isPlaying;
-        final activeId = audioService.activePlayingId;
-
-        return Container(
-          padding: const EdgeInsets.all(16.0),
-          decoration: AppStyles.cardDecoration(),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.headphones_outlined, size: 20, color: Colors.black87),
-                      SizedBox(width: 8),
-                      Text(
-                        'Recent Hive Buzz Recordings',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.black),
-                      ),
-                    ],
-                  ),
-                  InkWell(
-                    onTap: () {
-                      audioService.fetchRecordingsForDevice(_liveHive.deviceId);
-                    },
-                    borderRadius: BorderRadius.circular(6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: Colors.grey.shade300),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.refresh, size: 12, color: Colors.black54),
-                          SizedBox(width: 4),
-                          Text(
-                            'Refresh',
-                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black54),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Up to 5 recent 3.0-second acoustic audio clips captured on boot and cycle cooldown.',
-                style: TextStyle(fontSize: 11, color: Colors.black54),
-              ),
-              const SizedBox(height: 14),
-
-              if (recordings.isEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.black12),
-                  ),
-                  child: Column(
-                    children: [
-                      const Icon(Icons.mic_none_outlined, size: 36, color: Colors.black38),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Awaiting buzz recordings from ${_liveHive.name}...',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Recordings are captured in 3-second clips whenever the ESP32 node boots up or completes a cooldown cycle.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 11, color: Colors.black54),
-                      ),
-                    ],
-                  ),
-                ),
-              ] else ...[
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: recordings.length,
-                  separatorBuilder: (context, index) => const Divider(height: 16, color: Colors.black12),
-                  itemBuilder: (context, index) {
-                    final clip = recordings[index];
-                    final isThisPlaying = isPlaying && activeId == clip.id;
-
-                    Color badgeColor = AppColors.healthyGreen;
-                    Color badgeBg = AppColors.queenPresentGreenBg;
-                    if (clip.frequency == 0 || clip.condition.toLowerCase().contains('no buzz')) {
-                      badgeColor = AppColors.queenAbsentRed;
-                      badgeBg = AppColors.queenAbsentRedBg;
-                    } else if (clip.frequency >= 320 || clip.condition.toLowerCase().contains('rejected')) {
-                      badgeColor = AppColors.queenRejectedOrange;
-                      badgeBg = AppColors.queenRejectedOrangeBg;
-                    } else if (clip.condition.toLowerCase().contains('accepted')) {
-                      badgeColor = AppColors.queenAcceptedBlue;
-                      badgeBg = AppColors.queenAcceptedBlueBg;
-                    }
-
-                    return Container(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Row(
-                        children: [
-                          // Play/Pause button
-                          GestureDetector(
-                            onTap: () {
-                              audioService.playRecording(clip);
-                            },
-                            child: Container(
-                              width: 44,
-                              height: 44,
-                              decoration: BoxDecoration(
-                                color: isThisPlaying ? Colors.black : const Color(0xFFFFCC00),
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.12),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Icon(
-                                isThisPlaying ? Icons.stop_rounded : Icons.play_arrow_rounded,
-                                color: isThisPlaying ? Colors.white : Colors.black,
-                                size: 26,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-
-                          // Metadata column
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
-                                      child: Row(
-                                        children: [
-                                          Text(
-                                            'Clip #${index + 1}',
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w800,
-                                              color: Colors.black,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                            decoration: BoxDecoration(
-                                              color: clip.isRestartEvent
-                                                  ? const Color(0xFFFFF3E0)
-                                                  : const Color(0xFFE3F2FD),
-                                              borderRadius: BorderRadius.circular(4),
-                                              border: Border.all(
-                                                color: clip.isRestartEvent
-                                                    ? const Color(0xFFFFB74D)
-                                                    : const Color(0xFF90CAF9),
-                                                width: 0.8,
-                                              ),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Icon(
-                                                  clip.isRestartEvent ? Icons.restart_alt : Icons.hourglass_bottom_rounded,
-                                                  size: 10,
-                                                  color: clip.isRestartEvent ? const Color(0xFFE65100) : const Color(0xFF1976D2),
-                                                ),
-                                                const SizedBox(width: 3),
-                                                Text(
-                                                  clip.triggerLabel,
-                                                  style: TextStyle(
-                                                    fontSize: 9.5,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: clip.isRestartEvent ? const Color(0xFFE65100) : const Color(0xFF1976D2),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: badgeBg,
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(
-                                        clip.frequency > 0 ? '${clip.frequency} Hz' : '0 Hz',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w800,
-                                          color: badgeColor,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 3),
-                                Row(
-                                  children: [
-                                    const Icon(Icons.access_time_filled, size: 12, color: Colors.black45),
-                                    const SizedBox(width: 4),
-                                    Expanded(
-                                      child: Text(
-                                        'Recorded at ${clip.formattedRecordedTime}${clip.formattedRecordedDate.isNotEmpty ? " • ${clip.formattedRecordedDate}" : ""} (${_getClipDisplayTimestamp(index, clip)})',
-                                        style: const TextStyle(
-                                          fontSize: 10.5,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.black87,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 3),
-                                Row(
-                                  children: [
-                                    Text(
-                                      clip.condition,
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: badgeColor,
-                                      ),
-                                    ),
-                                    const Text(' • ', style: TextStyle(fontSize: 11, color: Colors.black38)),
-                                    Text(
-                                      '${clip.temperature.toStringAsFixed(1)}°C / ${clip.humidity.toStringAsFixed(0)}%',
-                                      style: const TextStyle(fontSize: 11, color: Colors.black54),
-                                    ),
-                                    const Spacer(),
-                                    Text(
-                                      isThisPlaying ? 'Playing...' : '3.0s',
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                        color: isThisPlaying ? const Color(0xFFE65100) : Colors.black45,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  String _getClipDisplayTimestamp(int index, AudioRecordingModel clip) {
-    int epoch = clip.createdAt;
-    if (epoch > 0 && epoch < 1700000000000 && epoch > 1700000000) {
-      epoch = epoch * 1000;
-    }
-
-    if (epoch > 1700000000000) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final diffMs = now - epoch;
-      if (diffMs >= 0) {
-        final diffMin = diffMs ~/ 60000;
-        if (diffMin < 1) {
-          return 'Just now';
-        } else if (diffMin < 60) {
-          return '$diffMin min${diffMin > 1 ? "s" : ""} ago';
-        } else {
-          final hours = diffMin ~/ 60;
-          if (hours < 24) {
-            return '$hours hr${hours > 1 ? "s" : ""} ago';
-          } else {
-            final days = hours ~/ 24;
-            return '$days day${days > 1 ? "s" : ""} ago';
-          }
-        }
-      }
-    }
-    return 'Recorded earlier';
   }
 }

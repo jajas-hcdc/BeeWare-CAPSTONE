@@ -11,14 +11,23 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // User profiles: users can only read and write their own profile
-    match /users/{userId} {
-      allow read, write: if isOwner(userId);
+    function isOwnerRole() {
+      return isAuthenticated() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner' ||
+        request.auth.token.role == 'owner'
+      );
     }
 
-    // Shared Apiary Hives: all authenticated members with the private APK can view, monitor, and manage apiary hives
+    // User profiles: authenticated members can view team profiles; users can update their own profile; owners can manage all
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId) || isOwnerRole();
+    }
+
+    // Shared Apiary Hives: all authenticated members can view, monitor, and manage apiary hives
     match /hives/{hiveId} {
       allow read, write: if isAuthenticated();
+      allow delete: if isAuthenticated();
     }
 
     // Nested user hives (subcollection support)

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/hive_data.dart';
 import '../services/hive_service.dart';
+import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/beehive_icon.dart';
 import 'hive_detail_screen.dart';
@@ -20,6 +21,15 @@ class _HivesScreenState extends State<HivesScreen> {
   String _searchQuery = '';
 
   void _showAddHiveOptions() {
+    if (!UserProfileService().isAdminOrOwner) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hive registration is restricted to Apiary Admins and Owners.'),
+          backgroundColor: Colors.black87,
+        ),
+      );
+      return;
+    }
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -245,32 +255,39 @@ class _HivesScreenState extends State<HivesScreen> {
                           color: Colors.black,
                         ),
                       ),
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: HiveService().unpairedNodes.isNotEmpty
-                                ? Badge(
-                                    label: Text(
-                                      '${HiveService().unpairedNodes.length}',
-                                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                                    ),
-                                    backgroundColor: const Color(0xFF2E7D32),
-                                    child: const Icon(Icons.add, color: Colors.black, size: 28),
-                                  )
-                                : const Icon(Icons.add, color: Colors.black, size: 28),
-                            onPressed: _showAddHiveOptions,
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.menu, color: Colors.black, size: 26),
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => const HiveManagementScreen(),
+                      AnimatedBuilder(
+                        animation: UserProfileService(),
+                        builder: (context, _) {
+                          final canAddHive = UserProfileService().isAdminOrOwner;
+                          return Row(
+                            children: [
+                              if (canAddHive)
+                                IconButton(
+                                  icon: HiveService().unpairedNodes.isNotEmpty
+                                      ? Badge(
+                                          label: Text(
+                                            '${HiveService().unpairedNodes.length}',
+                                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                                          ),
+                                          backgroundColor: const Color(0xFF2E7D32),
+                                          child: const Icon(Icons.add, color: Colors.black, size: 28),
+                                        )
+                                      : const Icon(Icons.add, color: Colors.black, size: 28),
+                                  onPressed: _showAddHiveOptions,
                                 ),
-                              );
-                            },
-                          ),
-                        ],
+                              IconButton(
+                                icon: const Icon(Icons.menu, color: Colors.black, size: 26),
+                                onPressed: () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (context) => const HiveManagementScreen(),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   ),

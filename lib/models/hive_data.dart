@@ -279,7 +279,7 @@ class HiveData {
 
     final bool isFreqBelowBeeBand = freqInt != null && freqInt > 0 && freqInt < 90;
     final bool isFreqQueenPresent = freqInt != null && ((freqInt >= 90 && freqInt <= 260) || freqInt >= 500);
-    final bool isFreqQueenAbsent = freqInt != null && freqInt > 320 && freqInt < 500;
+    final bool isFreqQueenAbsent = freqInt != null && freqInt >= 300 && freqInt < 500;
 
     if ((isAcousticZero || isFreqBelowBeeBand) && (condition == 'Queen Present' || condition.isEmpty)) {
       condition = 'No Buzz Detected';

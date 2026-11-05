@@ -3,15 +3,22 @@ import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
-import 'management_screen.dart';
+import 'change_password_screen.dart';
 import 'notification_settings_screen.dart';
 import 'about_screen.dart';
 import 'logout_screen.dart';
 import 'user_profile_screen.dart';
 import 'user_guide_screen.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  String _selectedLanguage = 'English';
 
   @override
   Widget build(BuildContext context) {
@@ -119,18 +126,20 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 14),
 
             // Settings Options List
+            // 1. Change password (moved from Management to top of Notification Settings)
             _settingsTile(
               context: context,
-              icon: Icons.person_outline,
-              title: 'Management',
+              icon: Icons.lock_outline,
+              title: 'Change password',
               onTap: () {
                 Navigator.of(context).push(
-                  MaterialPageRoute(builder: (context) => const ManagementScreen()),
+                  MaterialPageRoute(builder: (context) => const ChangePasswordScreen()),
                 );
               },
             ),
             const SizedBox(height: 10),
 
+            // 2. Notification Settings
             _settingsTile(
               context: context,
               icon: Icons.notifications_none,
@@ -143,6 +152,7 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 10),
 
+            // 3. App User Guide & Tutorials
             _settingsTile(
               context: context,
               icon: Icons.menu_book_outlined,
@@ -155,6 +165,17 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 10),
 
+            // 4. Language (placed above About BeeWare)
+            _settingsTile(
+              context: context,
+              icon: Icons.language,
+              title: 'Language',
+              trailingText: _selectedLanguage,
+              onTap: () => _showLanguageBottomSheet(context),
+            ),
+            const SizedBox(height: 10),
+
+            // 5. About BeeWare
             _settingsTile(
               context: context,
               icon: Icons.info_outline,
@@ -239,10 +260,67 @@ class SettingsScreen extends StatelessWidget {
     }
   }
 
+  void _showLanguageBottomSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final languages = ['English'];
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20.0, horizontal: 20.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Select Language',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.black,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                ...languages.map((lang) {
+                  final isSelected = lang == _selectedLanguage;
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      lang,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
+                        color: Colors.black,
+                      ),
+                    ),
+                    trailing: isSelected
+                        ? const Icon(Icons.check_circle, color: Colors.black)
+                        : const Icon(Icons.circle_outlined, color: Colors.black26),
+                    onTap: () {
+                      setState(() {
+                        _selectedLanguage = lang;
+                      });
+                      Navigator.of(ctx).pop();
+                    },
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _settingsTile({
     required BuildContext context,
     required IconData icon,
     required String title,
+    String? trailingText,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
@@ -264,6 +342,17 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ),
             ),
+            if (trailingText != null) ...[
+              Text(
+                trailingText,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black54,
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
             const Icon(Icons.chevron_right, color: Colors.black, size: 22),
           ],
         ),

@@ -14,7 +14,7 @@ class AlertsScreen extends StatefulWidget {
 class _AlertsScreenState extends State<AlertsScreen> {
   int _selectedFilter = 0;
   late final PageController _pageController;
-  final List<String> _filterTabs = ['All', 'Critical', 'Warning'];
+  final List<String> _filterTabs = ['All', 'Critical', 'Warning', 'Resolved'];
 
   @override
   void initState() {
@@ -44,9 +44,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return AnimatedBuilder(
       animation: AlertService(),
       builder: (context, child) {
-        final allAlerts = AlertService().alerts;
-        final criticalAlerts = allAlerts.where((a) => a.severity.toLowerCase() == 'critical').toList();
-        final warningAlerts = allAlerts.where((a) => a.severity.toLowerCase() == 'warning').toList();
+        final activeAlerts = AlertService().activeAlerts;
+        final criticalAlerts = activeAlerts.where((a) => a.severity.toLowerCase() == 'critical').toList();
+        final warningAlerts = activeAlerts.where((a) => a.severity.toLowerCase() == 'warning').toList();
+        final resolvedAlerts = AlertService().resolvedAlerts;
 
         return Scaffold(
           backgroundColor: AppColors.screenYellow,
@@ -112,9 +113,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     setState(() => _selectedFilter = index);
                   },
                   children: [
-                    _buildAlertsList(context, allAlerts),
+                    _buildAlertsList(context, activeAlerts),
                     _buildAlertsList(context, criticalAlerts),
                     _buildAlertsList(context, warningAlerts),
+                    _buildAlertsList(context, resolvedAlerts),
                   ],
                 ),
               ),
@@ -148,6 +150,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 
   Widget _buildAlertCard(BuildContext context, AlertModel alert) {
+    final isResolved = alert.isResolved;
+
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
@@ -159,41 +163,66 @@ class _AlertsScreenState extends State<AlertsScreen> {
       child: Container(
         padding: const EdgeInsets.all(14.0),
         decoration: AppStyles.cardDecoration(
-          color: alert.severityBgColor,
+          color: isResolved ? const Color(0xFFF1F8F4) : alert.severityBgColor,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(alert.iconData, size: 32, color: alert.severityColor),
+            Icon(
+              isResolved ? Icons.check_circle : alert.iconData,
+              size: 32,
+              color: isResolved ? const Color(0xFF2E7D32) : alert.severityColor,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    alert.hiveId,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.black,
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        alert.hiveId,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black,
+                        ),
+                      ),
+                      if (isResolved) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2E7D32),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'RESOLVED',
+                            style: TextStyle(color: Colors.white, fontSize: 8.5, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text(
                     alert.title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w800,
-                      color: Colors.black,
+                      color: isResolved ? Colors.black54 : Colors.black,
+                      decoration: isResolved ? TextDecoration.lineThrough : null,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    alert.message,
-                    style: const TextStyle(
+                    isResolved && alert.resolutionNotes != null
+                        ? 'Inspected: ${alert.resolutionNotes}'
+                        : alert.message,
+                    style: TextStyle(
                       fontSize: 11,
-                      color: Colors.black87,
+                      color: isResolved ? const Color(0xFF2E7D32) : Colors.black87,
                       height: 1.2,
                     ),
                     maxLines: 2,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/hive_data.dart';
 import '../models/alert_model.dart';
 import '../services/alert_service.dart';
+import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_app_bar.dart';
 
@@ -34,6 +35,101 @@ class AlertDetailsScreen extends StatelessWidget {
                     recommendation: 'Check hive sensors and telemetry.',
                   ));
 
+  void _showResolveDialog(BuildContext context) {
+    final notesController = TextEditingController(text: 'Field inspection completed. Anomaly resolved.');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: Colors.black, width: 1.5),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 24),
+            SizedBox(width: 8),
+            Text('Resolve Incident', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 17)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Mark "${alert.title}" for ${alert.hiveId} as resolved in the field and sync to cloud surveillance.',
+              style: const TextStyle(fontSize: 13, color: Colors.black87),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Field Inspection Notes:',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black),
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: notesController,
+              maxLines: 2,
+              style: const TextStyle(fontSize: 13, color: Colors.black),
+              decoration: AppStyles.inputDecoration(
+                hintText: 'e.g. Hive entrance cleared, queen verified',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.black54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2E7D32),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+                side: const BorderSide(color: Colors.black, width: 1),
+              ),
+            ),
+            onPressed: () async {
+              final notes = notesController.text.trim();
+              final resolver = UserProfileService().nickname;
+              await AlertService().resolveAlert(
+                alert,
+                resolvedBy: resolver,
+                notes: notes.isNotEmpty ? notes : 'Field inspection completed',
+              );
+              if (context.mounted) {
+                Navigator.pop(ctx);
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Incident resolved by $resolver and synced to cloud.'),
+                    backgroundColor: const Color(0xFF2E7D32),
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+              }
+            },
+            child: const Text('Confirm Resolution', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _reopenIncident(BuildContext context) async {
+    await AlertService().reopenAlert(alert);
+    if (context.mounted) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Incident re-opened and moved to active alarms.'),
+          backgroundColor: Colors.black87,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -51,25 +147,52 @@ class AlertDetailsScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(16.0),
               decoration: AppStyles.cardDecoration(
-                color: alert.severityBgColor,
+                color: alert.isResolved ? const Color(0xFFE8F5E9) : alert.severityBgColor,
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Row(
                 children: [
-                  Icon(alert.iconData, size: 36, color: alert.severityColor),
+                  Icon(
+                    alert.isResolved ? Icons.check_circle : alert.iconData,
+                    size: 36,
+                    color: alert.isResolved ? const Color(0xFF2E7D32) : alert.severityColor,
+                  ),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          alert.hiveId,
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Colors.black),
+                        Row(
+                          children: [
+                            Text(
+                              alert.hiveId,
+                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Colors.black),
+                            ),
+                            if (alert.isResolved) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2E7D32),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  'RESOLVED',
+                                  style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                         const SizedBox(height: 2),
                         Text(
                           alert.title,
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black87),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.black87,
+                            decoration: alert.isResolved ? TextDecoration.lineThrough : null,
+                          ),
                         ),
                       ],
                     ),
@@ -82,6 +205,51 @@ class AlertDetailsScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
+
+            // Resolution info banner (if resolved)
+            if (alert.isResolved) ...[
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFF2E7D32), width: 1.5),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.verified, color: Color(0xFF2E7D32), size: 18),
+                        SizedBox(width: 6),
+                        Text(
+                          'Inspection Completed',
+                          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Color(0xFF1B5E20)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Resolved by: ${alert.resolvedBy ?? 'Beekeeper'}',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87),
+                    ),
+                    if (alert.resolvedTimeFormatted != null)
+                      Text(
+                        'Time: ${alert.resolvedTimeFormatted}',
+                        style: const TextStyle(fontSize: 11, color: Colors.black54),
+                      ),
+                    if (alert.resolutionNotes != null && alert.resolutionNotes!.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Notes: "${alert.resolutionNotes}"',
+                        style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.black87),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
 
             // Detailed specification table
             Container(
@@ -106,29 +274,39 @@ class AlertDetailsScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: () {
-                AlertService().dismissAlert(alert.id);
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Alert dismissed.'),
-                    duration: Duration(seconds: 2),
-                    backgroundColor: Colors.black87,
+
+            // Action Buttons
+            if (!alert.isResolved)
+              ElevatedButton.icon(
+                onPressed: () => _showResolveDialog(context),
+                icon: const Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
+                label: const Text(
+                  'Resolve Alert / Mark Inspected',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2E7D32),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: const BorderSide(color: Colors.black, width: 1.2),
                   ),
-                );
-              },
-              icon: const Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
-              label: const Text(
-                'Mark as Resolved / Dismiss',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+              )
+            else if (UserProfileService().isAdminOrOwner)
+              OutlinedButton.icon(
+                onPressed: () => _reopenIncident(context),
+                icon: const Icon(Icons.refresh, color: Colors.black87, size: 18),
+                label: const Text(
+                  'Re-open Incident (Move to Active)',
+                  style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  side: const BorderSide(color: Colors.black54, width: 1.2),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.black87,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-            ),
           ],
         ),
       ),

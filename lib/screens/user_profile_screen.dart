@@ -20,59 +20,16 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   final List<String> _genders = ['MALE', 'FEMALE', 'OTHERS'];
   late String _selectedAvatar;
   String? _customImagePath;
-  late String _nickname;
   final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
     final profile = UserProfileService();
-    _nickname = profile.nickname;
     _selectedAvatar = profile.selectedAvatar;
     _customImagePath = profile.customImagePath;
     _selectedGender = profile.selectedGender;
     _selectedDob = profile.selectedDob;
-  }
-
-  void _showEditNicknameDialog() {
-    final controller = TextEditingController(text: _nickname);
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Edit Nickname', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Enter your nickname',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel', style: TextStyle(color: Colors.black54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFFCC00),
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            onPressed: () {
-              if (controller.text.trim().isNotEmpty) {
-                final newNick = controller.text.trim();
-                setState(() => _nickname = newNick);
-                UserProfileService().setNickname(newNick);
-              }
-              Navigator.of(ctx).pop();
-            },
-            child: const Text('Save', style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -278,214 +235,299 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
+  String _formatRoleName(String rawRole) {
+    switch (rawRole.toLowerCase().trim()) {
+      case 'owner':
+        return 'Owner';
+      case 'admin':
+        return 'Admin';
+      case 'beekeeper':
+      default:
+        return 'Beekeeper';
+    }
+  }
+
+  Widget _buildRoleBadge(String roleName) {
+    Color bg;
+    Color border;
+    Color textColor;
+    IconData icon;
+
+    switch (roleName.toLowerCase().trim()) {
+      case 'owner':
+        bg = const Color(0xFFFFF8E1);
+        border = const Color(0xFFFFD54F);
+        textColor = const Color(0xFFB78103);
+        icon = Icons.verified_user_rounded;
+        break;
+      case 'admin':
+        bg = const Color(0xFFEDE7F6);
+        border = const Color(0xFFB39DDB);
+        textColor = const Color(0xFF4A148C);
+        icon = Icons.admin_panel_settings_rounded;
+        break;
+      case 'beekeeper':
+      default:
+        bg = const Color(0xFFE8F5E9);
+        border = const Color(0xFFA5D6A7);
+        textColor = const Color(0xFF1B5E20);
+        icon = Icons.spa_rounded;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border, width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: textColor),
+          const SizedBox(width: 4),
+          Text(
+            roleName.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: textColor,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = AuthService().currentUser;
-    final displayName = user?.displayName ?? 'justinepugosa';
+    final displayName = (user?.displayName != null && user!.displayName!.isNotEmpty)
+        ? user.displayName!
+        : (user?.email != null && user!.email!.contains('@')
+            ? user.email!.split('@').first
+            : 'jas');
     final email = user?.email ?? 'justinepugosa@gmail.com';
 
-    return Scaffold(
-      backgroundColor: AppColors.screenYellow,
-      appBar: const CustomHeaderBar(
-        title: 'User Profile',
-        showBack: true,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Top Profile Card
-            Container(
-              padding: const EdgeInsets.all(16.0),
-              decoration: AppStyles.cardDecoration(borderRadius: BorderRadius.circular(16)),
-              child: Row(
-                children: [
-                  Column(
+    return AnimatedBuilder(
+      animation: UserProfileService(),
+      builder: (context, _) {
+        final profileRole = UserProfileService().role;
+        final rawRole = UserProfileService.deriveRoleFromEmail(email, defaultRole: profileRole);
+        final roleDisplay = _formatRoleName(rawRole);
+
+        return Scaffold(
+          backgroundColor: AppColors.screenYellow,
+          appBar: const CustomHeaderBar(
+            title: 'User Profile',
+            showBack: true,
+          ),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Top Profile Card
+                Container(
+                  padding: const EdgeInsets.all(16.0),
+                  decoration: AppStyles.cardDecoration(borderRadius: BorderRadius.circular(16)),
+                  child: Row(
                     children: [
-                      GestureDetector(
-                        onTap: _showChangePhotoModal,
-                        child: Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white,
-                            border: Border.all(color: Colors.black, width: 1.5),
+                      Column(
+                        children: [
+                          GestureDetector(
+                            onTap: _showChangePhotoModal,
+                            child: Container(
+                              width: 64,
+                              height: 64,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                                border: Border.all(color: Colors.black, width: 1.5),
+                              ),
+                              child: Center(child: _buildAvatarWidget()),
+                            ),
                           ),
-                          child: Center(child: _buildAvatarWidget()),
-                        ),
+                          const SizedBox(height: 6),
+                          GestureDetector(
+                            onTap: _showChangePhotoModal,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFAFAFA),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.black87, width: 1),
+                              ),
+                              child: const Text(
+                                'Change Photo',
+                                style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.black),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 6),
-                      GestureDetector(
-                        onTap: _showChangePhotoModal,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFAFAFA),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: Colors.black87, width: 1),
-                          ),
-                          child: const Text(
-                            'Change Photo',
-                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.black),
-                          ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    displayName,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.black,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                _buildRoleBadge(roleDisplay),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              email,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.black54,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          displayName,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.black,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          email,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Colors.black54,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
+                ),
+                const SizedBox(height: 14),
 
-            // Username, Nickname & Email detail card
-            Container(
-              decoration: AppStyles.cardDecoration(borderRadius: BorderRadius.circular(16)),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                    child: Text(
-                      'Username: $displayName',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
+                // Username, Role & Email detail card
+                Container(
+                  decoration: AppStyles.cardDecoration(borderRadius: BorderRadius.circular(16)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+                        child: Text(
+                          'Username: $displayName',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
+                        ),
+                      ),
+                      const Divider(color: Colors.black12, height: 1),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Role:',
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
+                            ),
+                            _buildRoleBadge(roleDisplay),
+                          ],
+                        ),
+                      ),
+                      const Divider(color: Colors.black12, height: 1),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+                        child: Text(
+                          'Email: $email',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Gender Field
+                const Text(
+                  'Gender',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.black, width: 1.2),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _selectedGender,
+                      isExpanded: true,
+                      icon: const Icon(Icons.arrow_drop_down, color: Colors.black),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.black),
+                      items: _genders.map((g) {
+                        return DropdownMenuItem(
+                          value: g,
+                          child: Text(g),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => _selectedGender = val);
+                          UserProfileService().setGender(val);
+                        }
+                      },
                     ),
                   ),
-                  const Divider(color: Colors.black12, height: 1),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+                ),
+                const SizedBox(height: 16),
+
+                // Date of Birth Field
+                const Text(
+                  'Date of Birth',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black),
+                ),
+                const SizedBox(height: 6),
+                GestureDetector(
+                  onTap: () {
+                    showDialog(
+                      context: context,
+                      builder: (context) => CustomCalendarPickerDialog(
+                        initialDate: _selectedDob,
+                        onDateSelected: (date) {
+                          setState(() => _selectedDob = date);
+                          UserProfileService().setDob(date);
+                        },
+                      ),
+                    );
+                  },
+                  child: Container(
+                    height: 48,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.black, width: 1.2),
+                    ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'Nickname: $_nickname',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
+                          _formatDob(_selectedDob),
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black),
                         ),
-                        GestureDetector(
-                          onTap: _showEditNicknameDialog,
-                          child: const Icon(Icons.edit_outlined, size: 16, color: Colors.black54),
-                        ),
+                        const Icon(Icons.calendar_today_outlined, size: 20, color: Colors.black87),
                       ],
                     ),
                   ),
-                  const Divider(color: Colors.black12, height: 1),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                    child: Text(
-                      'Email: $email',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.black87),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Gender Field
-            const Text(
-              'Gender',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black),
-            ),
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.black, width: 1.2),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedGender,
-                  isExpanded: true,
-                  icon: const Icon(Icons.arrow_drop_down, color: Colors.black),
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.black),
-                  items: _genders.map((g) {
-                    return DropdownMenuItem(
-                      value: g,
-                      child: Text(g),
-                    );
-                  }).toList(),
-                  onChanged: (val) {
-                    if (val != null) {
-                      setState(() => _selectedGender = val);
-                      UserProfileService().setGender(val);
-                    }
-                  },
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 16),
-
-            // Date of Birth Field
-            const Text(
-              'Date of Birth',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black),
-            ),
-            const SizedBox(height: 6),
-            GestureDetector(
-              onTap: () {
-                showDialog(
-                  context: context,
-                  builder: (context) => CustomCalendarPickerDialog(
-                    initialDate: _selectedDob,
-                    onDateSelected: (date) {
-                      setState(() => _selectedDob = date);
-                      UserProfileService().setDob(date);
-                    },
-                  ),
-                );
-              },
-              child: Container(
-                height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.black, width: 1.2),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      _formatDob(_selectedDob),
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.black),
-                    ),
-                    const Icon(Icons.calendar_today_outlined, size: 20, color: Colors.black87),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

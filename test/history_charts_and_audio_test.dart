@@ -9,7 +9,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('Interactive History Charts & Audio Recordings Tests', () {
-    testWidgets('Temperature, Humidity, and Acoustic all render BarChart widgets', (tester) async {
+    testWidgets('Temperature, Humidity, and Acoustic all render LineChart widgets', (tester) async {
       final hive = HiveData(
         id: 'hive_test_charts',
         name: 'Test Chart Hive',
@@ -39,9 +39,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Find BarChart widgets - should have 3 (Temperature, Humidity, Acoustic Energy)
-      final barCharts = find.byType(BarChart);
-      expect(barCharts, findsNWidgets(3));
+      // Find LineChart widgets - should have 3 (Temperature, Humidity, Acoustic Energy)
+      final lineCharts = find.byType(LineChart);
+      expect(lineCharts, findsNWidgets(3));
 
       // Check titles exist
       expect(find.text('Temperature History (°C)'), findsOneWidget);
@@ -222,17 +222,17 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // In 24 Hours (default), all 3 readings from Oct 11 are shown as 3 bars
-      var tempChart = tester.widgetList<BarChart>(find.byType(BarChart)).first;
-      expect(tempChart.data.barGroups.length, 3);
+      // In 24 Hours (default), all 3 readings from Oct 11 are shown as 3 spots
+      var tempChart = tester.widgetList<LineChart>(find.byType(LineChart)).first;
+      expect(tempChart.data.lineBarsData.first.spots.length, 3);
 
       // Tap "7 Days"
       await tester.tap(find.text('7 Days'));
       await tester.pumpAndSettle();
 
-      tempChart = tester.widgetList<BarChart>(find.byType(BarChart)).first;
-      expect(tempChart.data.barGroups.length, 1);
-      expect(tempChart.data.barGroups.first.barRods.first.toY, 34.0);
+      tempChart = tester.widgetList<LineChart>(find.byType(LineChart)).first;
+      expect(tempChart.data.lineBarsData.first.spots.length, 1);
+      expect(tempChart.data.lineBarsData.first.spots.first.y, 34.0);
       expect(find.text('Avg: 34.0°C'), findsOneWidget);
       expect(find.text('Avg: 62%'), findsOneWidget);
       expect(find.text('Avg: 140 Hz'), findsOneWidget);
@@ -241,9 +241,9 @@ void main() {
       await tester.tap(find.text('30 Days'));
       await tester.pumpAndSettle();
 
-      tempChart = tester.widgetList<BarChart>(find.byType(BarChart)).first;
-      expect(tempChart.data.barGroups.length, 1);
-      expect(tempChart.data.barGroups.first.barRods.first.toY, 34.0);
+      tempChart = tester.widgetList<LineChart>(find.byType(LineChart)).first;
+      expect(tempChart.data.lineBarsData.first.spots.length, 1);
+      expect(tempChart.data.lineBarsData.first.spots.first.y, 34.0);
     });
   });
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/alert_model.dart';
@@ -8,6 +9,7 @@ import 'backend_service.dart';
 import 'firebase_service.dart';
 import 'hive_service.dart';
 import 'notification_service.dart';
+import 'user_profile_service.dart';
 
 class AlertService extends ChangeNotifier {
   static final AlertService _instance = AlertService._internal();
@@ -110,9 +112,104 @@ class AlertService extends ChangeNotifier {
 
   List<AlertModel> get alerts => List.unmodifiable(_alerts);
 
+  List<AlertModel> get activeAlerts =>
+      List.unmodifiable(_alerts.where((a) => !a.isResolved));
+
+  List<AlertModel> get resolvedAlerts =>
+      List.unmodifiable(_alerts.where((a) => a.isResolved));
+
   List<AlertModel> get recentAlerts {
-    if (_alerts.isEmpty) return [];
-    return _alerts.take(4).toList();
+    final active = activeAlerts;
+    if (active.isEmpty) return [];
+    return active.take(4).toList();
+  }
+
+  Future<void> resolveAlert(
+    AlertModel alert, {
+    String? resolvedBy,
+    String? notes,
+  }) async {
+    final now = DateTime.now();
+    final resolvedTimestamp = now.millisecondsSinceEpoch;
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final hour = now.hour % 12 == 0 ? 12 : now.hour % 12;
+    final minute = now.minute.toString().padLeft(2, '0');
+    final ampm = now.hour >= 12 ? 'PM' : 'AM';
+    final timeFormatted = '${months[now.month - 1]} ${now.day}, ${hour.toString().padLeft(2, '0')}:$minute $ampm';
+    final resolverName = resolvedBy ?? UserProfileService().nickname;
+
+    final resolvedAlert = alert.copyWith(
+      isResolved: true,
+      resolvedAt: now,
+      resolvedBy: resolverName,
+      resolvedTimeFormatted: timeFormatted,
+      resolutionNotes: notes ?? 'Field inspection completed by beekeeper',
+    );
+
+    // 1. Sync to Cloud Firestore 'alerts' collection (triggers real-time update on Web console!)
+    try {
+      await FirebaseFirestore.instance.collection('alerts').doc(alert.id).set({
+        'status': 'resolved',
+        'resolved': true,
+        'resolvedAt': resolvedTimestamp,
+        'resolvedTimeFormatted': timeFormatted,
+        'resolvedBy': resolverName,
+        'resolutionNotes': notes ?? 'Field inspection completed by beekeeper',
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Error syncing resolved alert to Firestore: $e');
+    }
+
+    // 2. Update local state
+    final index = _alerts.indexWhere((a) => a.id == alert.id);
+    if (index != -1) {
+      _alerts[index] = resolvedAlert;
+    } else {
+      _alerts.insert(0, resolvedAlert);
+    }
+
+    // Also clear notification dispatched tracking for this alert
+    final devKey = NotificationService.extractDeviceKey(
+      payload: alert.hiveId,
+      title: alert.title,
+      body: alert.message,
+    );
+    final cat = NotificationService.classifyAnomalyCategory(alert.title, alert.message);
+    _dispatchedNotificationIds.remove('${devKey}_$cat');
+    NotificationService().clearDeviceCategoryState(devKey, cat);
+
+    _saveToCache();
+    notifyListeners();
+  }
+
+  Future<void> reopenAlert(AlertModel alert) async {
+    final activeAlert = alert.copyWith(
+      isResolved: false,
+      resolvedAt: null,
+      resolvedBy: null,
+      resolvedTimeFormatted: null,
+      resolutionNotes: null,
+    );
+
+    try {
+      await FirebaseFirestore.instance.collection('alerts').doc(alert.id).set({
+        'status': 'active',
+        'resolved': false,
+        'reopenedAt': DateTime.now().millisecondsSinceEpoch,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Error reopening alert in Firestore: $e');
+    }
+
+    final index = _alerts.indexWhere((a) => a.id == alert.id);
+    if (index != -1) {
+      _alerts[index] = activeAlert;
+    }
+
+    _saveToCache();
+    notifyListeners();
   }
 
   final Set<String> _dismissedAlertIds = {};
@@ -288,9 +385,13 @@ class AlertService extends ChangeNotifier {
       for (final map in rawFirestoreAlerts) {
         final alert = AlertModel.fromMap(map, map['id']);
         if (alert.timestamp.isBefore(oct9CutoffDt)) continue;
-        if (!seenIds.contains(alert.id) && !isAlertResolved(alert)) {
+        if (!seenIds.contains(alert.id)) {
           seenIds.add(alert.id);
-          result.add(alert);
+          if (alert.isResolved || isAlertResolved(alert)) {
+            result.add(alert.copyWith(isResolved: true));
+          } else {
+            result.add(alert);
+          }
         }
       }
     }
@@ -558,6 +659,7 @@ class AlertService extends ChangeNotifier {
   }
 
   void _dispatchNotificationIfNew(String deviceKey, String dispatchKey, AlertModel alert) {
+    if (alert.isResolved) return;
     if (!_pushEnabled && !_alertsEnabled) return;
     if (!HiveService().isDeviceActivelyOnline(deviceKey)) return;
     if (!_dispatchedNotificationIds.contains(dispatchKey)) {

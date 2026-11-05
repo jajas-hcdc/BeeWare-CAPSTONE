@@ -3,9 +3,11 @@ import '../models/hive_data.dart';
 import '../services/audio_service.dart';
 import '../services/export_service.dart';
 import '../services/hive_service.dart';
+import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/circular_gauge.dart';
 import '../widgets/custom_app_bar.dart';
+import '../widgets/hive_recordings_view.dart';
 import '../widgets/interactive_history_charts.dart';
 import '../widgets/sensor_visualizers.dart';
 
@@ -25,7 +27,12 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
   late HiveData _hive;
   late final PageController _pageController;
 
-  final List<String> _tabs = ['Overview', 'Sensors', 'AI analysis', 'History'];
+  List<String> get _currentTabs {
+    if (UserProfileService().isAdminOrOwner) {
+      return const ['Overview', 'Sensors', 'AI analysis', 'History', 'Recordings'];
+    }
+    return const ['Overview', 'Sensors', 'AI analysis', 'Recordings'];
+  }
 
   @override
   void initState() {
@@ -72,27 +79,28 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
   }
 
   String _getHeaderTitle() {
-    switch (_selectedTab) {
-      case 1:
-        return '${_hive.name} - Sensors';
-      case 2:
-        return '${_hive.name} - Analysis';
-      case 3:
-        return '${_hive.name} - History';
-      default:
-        return _hive.name;
-    }
+    final tabs = _currentTabs;
+    if (_selectedTab >= tabs.length) return _hive.name;
+    final tabName = tabs[_selectedTab];
+    if (tabName == 'Overview') return _hive.name;
+    return '${_hive.name} - $tabName';
   }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([HiveService(), AudioService()]),
+      animation: Listenable.merge([HiveService(), AudioService(), UserProfileService()]),
       builder: (context, child) {
         final live = HiveService().getHiveById(_hive.id);
         if (live != null) {
           _hive = live;
         }
+
+        final tabs = _currentTabs;
+        if (_selectedTab >= tabs.length) {
+          _selectedTab = tabs.length - 1;
+        }
+        final canViewHistory = UserProfileService().isAdminOrOwner;
 
         return Scaffold(
           backgroundColor: AppColors.screenYellow,
@@ -112,33 +120,35 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
               // Sub-tab Navigation Bar
               Container(
                 color: AppColors.screenYellow,
-                padding: const EdgeInsets.symmetric(vertical: 4.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: List.generate(_tabs.length, (index) {
-                    final isSelected = index == _selectedTab;
-                    return GestureDetector(
-                      onTap: () => _onTabTapped(index),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          border: isSelected
-                              ? const Border(
-                                  bottom: BorderSide(color: Colors.black, width: 2.5),
-                                )
-                              : null,
-                        ),
-                        child: Text(
-                          _tabs[index],
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
-                            color: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 6.0),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: List.generate(tabs.length, (index) {
+                      final isSelected = index == _selectedTab;
+                      return GestureDetector(
+                        onTap: () => _onTabTapped(index),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                          decoration: BoxDecoration(
+                            border: isSelected
+                                ? const Border(
+                                    bottom: BorderSide(color: Colors.black, width: 2.5),
+                                  )
+                                : null,
+                          ),
+                          child: Text(
+                            tabs[index],
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
+                              color: Colors.black,
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  }),
+                      );
+                    }),
+                  ),
                 ),
               ),
 
@@ -146,7 +156,7 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
               Expanded(
                 child: PageView(
                   controller: _pageController,
-                  physics: _selectedTab == 3
+                  physics: _selectedTab < tabs.length && tabs[_selectedTab] == 'History'
                       ? const NeverScrollableScrollPhysics()
                       : const PageScrollPhysics(),
                   onPageChanged: (index) {
@@ -156,7 +166,8 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
                     _buildTabWrapper(_buildOverviewTab()),
                     _buildTabWrapper(_buildSensorsTab()),
                     _buildTabWrapper(_buildAiAnalysisTab()),
-                    _buildTabWrapper(_buildHistoryTab()),
+                    if (canViewHistory) _buildTabWrapper(_buildHistoryTab()),
+                    _buildTabWrapper(_buildRecordingsTab()),
                   ],
                 ),
               ),
@@ -1519,5 +1530,10 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
   // ---------------- TAB 4: HISTORY ----------------
   Widget _buildHistoryTab() {
     return InteractiveHistoryView(hive: _hive);
+  }
+
+  // ---------------- TAB 5: RECORDINGS ----------------
+  Widget _buildRecordingsTab() {
+    return HiveRecordingsView(hive: _hive);
   }
 }

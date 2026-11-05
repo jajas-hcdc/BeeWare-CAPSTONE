@@ -167,9 +167,9 @@ class AudioProcessor {
       }
     }
 
-    // If the best bin landed in 320-490 Hz due to broadband rain splatter, check whether
+    // If the best bin landed in 300-490 Hz due to broadband rain splatter, check whether
     // the 90-260 Hz Queen Present band has comparable or strong fundamental energy (>= 45% of peak power).
-    if (rawHz > 320 && beePresentMinBin <= beePresentMaxBin) {
+    if (rawHz >= 300 && beePresentMinBin <= beePresentMaxBin) {
       int bestPresentBin = beePresentMinBin;
       double bestPresentPower = -1.0;
       for (int k = beePresentMinBin; k <= beePresentMaxBin; k++) {

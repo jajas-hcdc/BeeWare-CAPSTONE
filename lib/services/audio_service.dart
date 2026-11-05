@@ -352,7 +352,7 @@ class AudioService extends ChangeNotifier {
           }
           wavBytes = bytes;
           // Always extract the true FFT honeybee fundamental (8-490 Hz) from the WAV clip
-          // so INMP441 sub-bass zero-crossing drift (< 90 Hz) or cricket/rain spikes (>= 320 Hz)
+          // so INMP441 sub-bass zero-crossing drift (< 90 Hz) or cricket/rain spikes (>= 300 Hz)
           // are replaced by the real acoustic spectrum peak.
           final measuredHz = await AudioProcessor.computeDominantFrequencyHz(bytes);
           if (measuredHz > 0) {
@@ -389,7 +389,7 @@ class AudioService extends ChangeNotifier {
         }
       } else {
         final String fallbackCondition = clip.condition.toLowerCase().contains('no buzz') || clip.condition.trim().isEmpty
-            ? ((effectiveHz > 320 && effectiveHz < 500) ? 'Queen Absent' : 'Queen Present')
+            ? ((effectiveHz >= 300 && effectiveHz < 500) ? 'Queen Absent' : 'Queen Present')
             : clip.condition;
         String resolvedCondition = fallbackCondition;
         int resolvedConfidence = 92;

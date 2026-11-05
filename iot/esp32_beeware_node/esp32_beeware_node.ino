@@ -32,11 +32,11 @@
 #include "soc/rtc_cntl_reg.h"
 
 // ======================== FIRMWARE VERSION ========================
-#define FIRMWARE_VERSION    "2.0.0"
+#define FIRMWARE_VERSION    "2.0.1"
 
 // ======================== WI-FI CONFIGURATION ========================
-const char* WIFI_SSID     = "ALHN-4EE8";
-const char* WIFI_PASSWORD = "kG7vWpfzq3";
+const char* WIFI_SSID     = "Honea Bee Farm Guest";
+const char* WIFI_PASSWORD = "#Il0veGUEST#";
 
 // Firebase Realtime Database (Singapore)
 const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -294,12 +294,12 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
     conditionLabel = "Queen Present";
     confidenceVal = 95;
     healthScoreVal = 95;
-  } else if (freqHz > 320 && freqHz < 500) {
+  } else if (freqHz >= 300 && freqHz < 500) {
     conditionLabel = "Queen Absent";
     confidenceVal = 88;
     healthScoreVal = 40;
   } else {
-    // 261-320 Hz transitional or >= 500 Hz external cricket/rain interference:
+    // 261-299 Hz transitional or >= 500 Hz external cricket/rain interference:
     // Keep Queen Present so 500-1000+ Hz weather/insect spikes never trigger false Queen Absent alerts
     conditionLabel = "Queen Present";
     confidenceVal = 90;
@@ -401,7 +401,7 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
 
   int slot = audioSlotCounter % 5;
   String deviceId = getDeviceId();
-  String condition = freqHz > 320 ? "Queen Absent" : (freqHz >= 90 ? "Queen Present" : "No Buzz Detected");
+  String condition = (freqHz >= 300 && freqHz < 500) ? "Queen Absent" : (freqHz >= 90 ? "Queen Present" : "No Buzz Detected");
 
   size_t totalSamples = (size_t)(SAMPLE_RATE * RECORD_TIME_SECONDS);
   size_t totalB64Chars = (totalSamples * sizeof(int16_t) * 4) / 3;

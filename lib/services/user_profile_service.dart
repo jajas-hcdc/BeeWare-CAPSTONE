@@ -18,6 +18,7 @@ class UserProfileService extends ChangeNotifier {
   String? _customImagePath;
   String _selectedGender = 'MALE';
   DateTime _selectedDob = DateTime(1999, 1, 1);
+  String _role = 'beekeeper';
   bool _isInitialized = false;
   String? _currentUserId;
 
@@ -29,7 +30,27 @@ class UserProfileService extends ChangeNotifier {
   String? get customImagePath => _customImagePath;
   String get selectedGender => _selectedGender;
   DateTime get selectedDob => _selectedDob;
+  String get role => _role.toLowerCase();
+  bool get isAdminOrOwner => _role.toLowerCase() == 'admin' || _role.toLowerCase() == 'owner';
+  bool get isBeekeeper => !isAdminOrOwner;
   bool get isInitialized => _isInitialized;
+
+  /// Infers or overrides role based on user's email address or stored role.
+  /// If the email contains 'owner' -> 'owner'.
+  /// If the email contains 'admin' -> 'admin'.
+  /// If the email contains 'beekeeper' -> 'beekeeper'.
+  /// Otherwise falls back to stored role or default 'beekeeper'.
+  static String deriveRoleFromEmail(String? email, {String? defaultRole}) {
+    if (email != null && email.trim().isNotEmpty) {
+      final e = email.toLowerCase().trim();
+      if (e.contains('owner')) return 'owner';
+      if (e.contains('admin')) return 'admin';
+      if (e.contains('beekeeper')) return 'beekeeper';
+    }
+    final d = (defaultRole ?? '').toLowerCase().trim();
+    if (d == 'owner' || d == 'admin') return d;
+    return 'beekeeper';
+  }
 
   void _listenToAuth() {
     try {
@@ -65,6 +86,7 @@ class UserProfileService extends ChangeNotifier {
       _selectedAvatar = prefs.getString('beeware_guest_avatar') ?? 'default';
       _customImagePath = prefs.getString('beeware_guest_custom_image');
       _selectedGender = prefs.getString('beeware_guest_gender') ?? 'MALE';
+      _role = 'beekeeper';
       final dobMs = prefs.getInt('beeware_guest_dob');
       if (dobMs != null) {
         _selectedDob = DateTime.fromMillisecondsSinceEpoch(dobMs);
@@ -77,6 +99,7 @@ class UserProfileService extends ChangeNotifier {
       _selectedAvatar = 'default';
       _customImagePath = null;
       _selectedGender = 'MALE';
+      _role = 'beekeeper';
       _selectedDob = DateTime(1999, 1, 1);
     }
     _isInitialized = true;
@@ -108,6 +131,8 @@ class UserProfileService extends ChangeNotifier {
       _selectedAvatar = prefs.getString('beeware_${uid}_avatar') ?? 'default';
       _customImagePath = prefs.getString('beeware_${uid}_custom_image');
       _selectedGender = prefs.getString('beeware_${uid}_gender') ?? 'MALE';
+      final cachedRole = prefs.getString('beeware_${uid}_role') ?? 'beekeeper';
+      _role = deriveRoleFromEmail(user.email, defaultRole: cachedRole);
 
       final dobMs = prefs.getInt('beeware_${uid}_dob');
       if (dobMs != null) {
@@ -170,6 +195,16 @@ class UserProfileService extends ChangeNotifier {
                 _selectedGender = firestoreGender;
                 hasChanges = true;
               }
+            }
+
+            String targetRole = _role;
+            if (data['role'] != null && data['role'] is String) {
+              targetRole = (data['role'] as String).toLowerCase();
+            }
+            final derived = deriveRoleFromEmail(user.email, defaultRole: targetRole);
+            if (derived != _role) {
+              _role = derived;
+              hasChanges = true;
             }
 
             if (data['dobMs'] != null && data['dobMs'] is int) {
@@ -294,6 +329,7 @@ class UserProfileService extends ChangeNotifier {
         await prefs.remove('beeware_${uid}_custom_image');
       }
       await prefs.setString('beeware_${uid}_gender', _selectedGender);
+      await prefs.setString('beeware_${uid}_role', _role);
       await prefs.setInt('beeware_${uid}_dob', _selectedDob.millisecondsSinceEpoch);
     } catch (e) {
       debugPrint('UserProfileService save error: $e');

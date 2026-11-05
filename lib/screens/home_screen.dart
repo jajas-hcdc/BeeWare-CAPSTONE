@@ -210,13 +210,18 @@ class _HomeScreenState extends State<HomeScreen> {
         color: Colors.black,
         backgroundColor: const Color(0xFFFFCC00),
         onRefresh: () async {
-          await ConnectivityService().checkConnection();
-          if (ConnectivityService().isOnline) {
-            await HiveService().refreshFromCloud(notify: false);
+          HiveService().beginBatchRefresh();
+          try {
+            await ConnectivityService().checkConnection();
+            if (ConnectivityService().isOnline) {
+              await HiveService().refreshFromCloud(notify: false);
+            }
+            final records = await BackendService().fetchTelemetryRecords(limit: 20);
+            HiveService().updateFromBackendTelemetry(records);
+            await AlertService().refreshFromCloud();
+          } finally {
+            HiveService().endBatchRefresh();
           }
-          final records = await BackendService().fetchTelemetryRecords(limit: 20);
-          HiveService().updateFromBackendTelemetry(records);
-          await AlertService().refreshFromCloud();
         },
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),

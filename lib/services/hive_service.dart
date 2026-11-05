@@ -28,11 +28,25 @@ class HiveService extends ChangeNotifier {
   StreamSubscription<QuerySnapshot>? _hivesSubscription;
   StreamSubscription? _authSubscription;
   Timer? _debounceTimer;
+  bool _isRefreshing = false;
 
   List<HiveData> get hives => List.unmodifiable(_hives);
   List<HiveData> get unpairedNodes => List.unmodifiable(_unpairedNodes.values.toList());
 
+  /// Call before a batch refresh to suppress intermediate UI rebuilds.
+  void beginBatchRefresh() {
+    _isRefreshing = true;
+  }
+
+  /// Call after a batch refresh to emit a single consolidated UI update.
+  void endBatchRefresh() {
+    _isRefreshing = false;
+    _debounceTimer?.cancel();
+    notifyListeners();
+  }
+
   void _debouncedNotify() {
+    if (_isRefreshing) return;
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 300), () {
       notifyListeners();
@@ -405,16 +419,42 @@ class HiveService extends ChangeNotifier {
     }
   }
 
-  void deleteHive(String id) {
-    _hives.removeWhere((h) => h.id == id);
+  Future<void> deleteHive(String id) async {
+    final hive = getHiveById(id);
+    final String devId = hive?.deviceId.trim() ?? '';
+
+    _hives.removeWhere((h) =>
+        h.id == id ||
+        (devId.isNotEmpty && h.deviceId.trim().toUpperCase() == devId.toUpperCase()));
+    if (devId.isNotEmpty) {
+      _unpairedNodes.remove(devId.toUpperCase());
+    }
     _saveToCache();
     notifyListeners();
 
-    // Delete from shared Firestore collection so it reflects to all users immediately
+    // Delete from shared Firestore collection so it reflects to all users and website immediately
     try {
-      FirebaseFirestore.instance.collection('hives').doc(id).delete().catchError((e) {
+      final col = FirebaseFirestore.instance.collection('hives');
+      // 1. Delete by document ID
+      await col.doc(id).delete().catchError((e) {
         debugPrint('Firestore delete shared hive error: $e');
       });
+
+      // 2. Also delete any other Firestore docs associated with this deviceId
+      if (devId.isNotEmpty) {
+        final querySnap = await col.where('deviceId', isEqualTo: devId).get();
+        for (final doc in querySnap.docs) {
+          await doc.reference.delete().catchError((_) {});
+        }
+        final querySnapUpper = await col.where('deviceId', isEqualTo: devId.toUpperCase()).get();
+        for (final doc in querySnapUpper.docs) {
+          await doc.reference.delete().catchError((_) {});
+        }
+        await col.doc(devId).delete().catchError((_) {});
+        await col.doc(devId.toUpperCase()).delete().catchError((_) {});
+        final canonicalId = 'hive_${devId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_').toLowerCase()}';
+        await col.doc(canonicalId).delete().catchError((_) {});
+      }
     } catch (e) {
       debugPrint('Firestore delete shared hive skipped: $e');
     }
@@ -1483,7 +1523,7 @@ class HiveService extends ChangeNotifier {
     } else if (cond.contains('rejected')) {
       score -= 35.0;
     } else if (cond.contains('accepted') || cond.contains('present')) {
-      if (freqHz > 320) score -= 15.0; // Worker agitation
+      if (freqHz >= 300) score -= 15.0; // Worker agitation
     }
 
     return score.round().clamp(10, 100);

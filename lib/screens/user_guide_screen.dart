@@ -70,7 +70,7 @@ class _UserGuideScreenState extends State<UserGuideScreen> {
         'Open any hive from "My Hives" and tap or swipe to the "History" tab.',
         'Switch between "24 Hours", "7 Days", and "30 Days" timeframes using the top selector bar.',
         'Horizontal Swiping: Swipe left and right inside the Temperature, Humidity, and Acoustic charts to view earlier dates, and tap data points to inspect exact values.',
-        'Recent Hive Buzz Recordings: Listen to the latest 5-second WAV audio clips captured by the ESP32 microphone directly inside the History tab, complete with timestamps and trigger badges.',
+        'Recent Hive Buzz Recordings: Listen to the latest 3.0-second WAV audio clips captured by the ESP32 microphone directly inside the dedicated "Recordings" tab, complete with playback controls, frequency harmonics, and trigger badges.',
       ],
     },
     {
@@ -103,7 +103,7 @@ class _UserGuideScreenState extends State<UserGuideScreen> {
       'summary': 'Rename or remove paired hives, update your account password, and manage app preferences.',
       'steps': [
         'Hive Management: In the "My Hives" tab, tap the sliders icon in the top-right corner (or long-press a hive card) to rename a hive or delete it from your apiary.',
-        'Account Security: Go to Settings > Management > Change password to update your login credentials.',
+        'Account Security: Go to Settings > Change password to update your login credentials.',
         'Offline Indicator: When a paired ESP32 node is unplugged or loses Wi-Fi, its card displays an "Offline" badge and last-seen timestamp.',
       ],
     },

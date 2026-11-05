@@ -18,6 +18,20 @@
   "firestore": {
     "rules": "firestore.rules"
   },
+  "hosting": {
+    "public": "admin-web/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
   "flutter": {
     "platforms": {
       "android": {

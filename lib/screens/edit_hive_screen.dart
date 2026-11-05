@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/hive_data.dart';
 import '../services/hive_service.dart';
+import '../services/user_profile_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_app_bar.dart';
 
@@ -66,6 +67,15 @@ class _EditHiveScreenState extends State<EditHiveScreen> {
   }
 
   void _removeHive() {
+    if (!UserProfileService().isAdminOrOwner) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hive deletion is restricted to Apiary Admins and Owners.'),
+          backgroundColor: Colors.black87,
+        ),
+      );
+      return;
+    }
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -89,10 +99,11 @@ class _EditHiveScreenState extends State<EditHiveScreen> {
                 side: const BorderSide(color: Colors.black, width: 1),
               ),
             ),
-            onPressed: () {
-              HiveService().deleteHive(widget.hive.id);
+            onPressed: () async {
+              final hiveId = widget.hive.id;
               Navigator.pop(ctx); // Close dialog
               Navigator.pop(context, true); // Close screen
+              await HiveService().deleteHive(hiveId);
             },
             child: const Text('Remove'),
           ),
@@ -184,15 +195,17 @@ class _EditHiveScreenState extends State<EditHiveScreen> {
               isLoading: _isLoading,
               onPressed: _saveHive,
             ),
-            const SizedBox(height: 12),
 
-            // Remove Button
-            AppStyles.primaryButton(
-              text: 'Remove Hive',
-              backgroundColor: AppColors.btnRed,
-              textColor: Colors.black,
-              onPressed: _removeHive,
-            ),
+            // Remove Button (Admin & Owner Only)
+            if (UserProfileService().isAdminOrOwner) ...[
+              const SizedBox(height: 12),
+              AppStyles.primaryButton(
+                text: 'Remove Hive',
+                backgroundColor: AppColors.btnRed,
+                textColor: Colors.black,
+                onPressed: _removeHive,
+              ),
+            ],
           ],
         ),
       ),
