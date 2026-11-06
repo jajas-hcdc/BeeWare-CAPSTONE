@@ -10,7 +10,7 @@
 #include "soc/rtc_cntl_reg.h"
 
 // ======================== FIRMWARE VERSION ========================
-#define FIRMWARE_VERSION    "2.0.3"
+#define FIRMWARE_VERSION    "2.0.4"
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Honea Bee Farm Guest";
@@ -24,7 +24,7 @@ const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebase
 #define WDT_TIMEOUT_SECONDS 60        // 60 seconds hardware watchdog timeout
 #define RECORD_TIME_SECONDS 3.0       // 3.0 seconds audio
 #define SAMPLE_RATE         16000     // 16kHz studio sample rate
-#define VOLUME_GAIN         6         // Digital gain boost (6x for clean, audible bee buzzing without clipping)
+#define VOLUME_GAIN         7         // Digital gain boost (7x for maximum safe audibility)
 
 // INMP441 I2S Pins
 #define I2S_WS              25        // Word Select (WS / LRCL)
