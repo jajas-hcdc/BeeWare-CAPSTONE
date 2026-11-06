@@ -32,7 +32,7 @@
 #include "soc/rtc_cntl_reg.h"
 
 // ======================== FIRMWARE VERSION ========================
-#define FIRMWARE_VERSION    "2.0.1"
+#define FIRMWARE_VERSION    "2.0.2"
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Honea Bee Farm Guest";
@@ -214,7 +214,7 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
   size_t samplesReadTotal = 0;
   uint32_t startMs = millis();
 
-  const int32_t NOISE_THRESHOLD = 55;
+  const int32_t NOISE_THRESHOLD = 25;
   int zeroCrossings = 0;
   int prevSign = 0;
   int32_t dcEstimate = 0;
@@ -230,7 +230,7 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
     if (err == ESP_OK && bytesRead > 0) {
       size_t count = bytesRead / sizeof(int32_t);
       for (size_t i = 0; i < count; i++) {
-        int32_t rawShifted = (chunkRaw[i] >> 14);
+        int32_t rawShifted = (chunkRaw[i] >> 16);
         if (!dcInitialized) {
           dcEstimate = rawShifted;
           lpStage1 = 0;
@@ -239,7 +239,7 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
         } else {
           dcEstimate = (dcEstimate * 63 + rawShifted) / 64;
         }
-        int32_t sample = (rawShifted - dcEstimate) * VOLUME_GAIN;
+        int32_t sample = (rawShifted - dcEstimate);
         // 2-stage cascaded low-pass filter (~450 Hz cutoff) to suppress 500-4000 Hz cricket chirps & rain patter
         // before counting zero-crossings, isolating the true 90-480 Hz honeybee colony fundamental
         lpStage1 = (lpStage1 * 7 + sample) / 8;
@@ -256,7 +256,7 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
     }
   }
 
-  if (peakVal < 60 || zeroCrossings < 2 || samplesReadTotal == 0) {
+  if (peakVal < 25 || zeroCrossings < 2 || samplesReadTotal == 0) {
     freqHz = 0;
     Serial.println("⚠️ [INMP441] Acoustic silence / not detected (0 Hz)");
   } else {
@@ -286,11 +286,11 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
   String conditionLabel = "Queen Present";
   int confidenceVal = 95, healthScoreVal = 95;
 
-  if (freqHz == 0 || freqHz < 90) {
+  if (freqHz == 0 || freqHz < 35) {
     conditionLabel = "No Buzz Detected";
     confidenceVal = 60;
     healthScoreVal = 30;
-  } else if (freqHz >= 90 && freqHz <= 260) {
+  } else if (freqHz >= 35 && freqHz <= 260) {
     conditionLabel = "Queen Present";
     confidenceVal = 95;
     healthScoreVal = 95;
@@ -401,7 +401,7 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
 
   int slot = audioSlotCounter % 5;
   String deviceId = getDeviceId();
-  String condition = (freqHz >= 300 && freqHz < 500) ? "Queen Absent" : (freqHz >= 90 ? "Queen Present" : "No Buzz Detected");
+  String condition = (freqHz >= 300 && freqHz < 500) ? "Queen Absent" : (freqHz >= 35 ? "Queen Present" : "No Buzz Detected");
 
   size_t totalSamples = (size_t)(SAMPLE_RATE * RECORD_TIME_SECONDS);
   size_t totalB64Chars = (totalSamples * sizeof(int16_t) * 4) / 3;
@@ -474,7 +474,7 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
       if (err == ESP_OK && bytesRead > 0) {
         size_t readSamples = bytesRead / sizeof(int32_t);
         for (size_t i = 0; i < readSamples; i++) {
-          int32_t sample = (chunkRaw[i] >> 14) * VOLUME_GAIN;
+          int32_t sample = (chunkRaw[i] >> 16);
           if (sample > 32767) sample = 32767;
           if (sample < -32768) sample = -32768;
           batchPcm[batchCount++] = (int16_t)sample;

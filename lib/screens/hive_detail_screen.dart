@@ -251,8 +251,8 @@ class _HiveDetailScreenState extends State<HiveDetailScreen> {
       overviewDesc = 'No buzz detected (0 Hz / Silent). Acoustic activity is absent or microphone is disconnected.';
       conditionActionDesc = 'No Buzz Detected (0 Hz).\nInspect microphone or check hive activity.';
     } else if (isLowFreqNoBuzz) {
-      overviewDesc = 'Low frequency received (${_hive.acoustic} in 0–89 Hz Band 0–3). Classified as No Buzz Detected.';
-      conditionActionDesc = 'No Buzz Detected (${_hive.acoustic}).\nFrequency is below the 90 Hz bee buzzing range.';
+      overviewDesc = 'Low frequency received (${_hive.acoustic} < 35 Hz). Classified as No Buzz Detected.';
+      conditionActionDesc = 'No Buzz Detected (${_hive.acoustic}).\nFrequency is below the 35 Hz bee acoustic range.';
     } else if (_hive.conditionLabel.toLowerCase().contains('absent')) {
       overviewDesc = 'Acoustic frequency indicates Queenless Roar. Urgent frame inspection needed.';
       conditionActionDesc = 'Urgent Intervention Required.\nInspect brood frames for queen cells.';

@@ -996,7 +996,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
               const SizedBox(width: 4),
               const Expanded(
                 child: Text(
-                  'Normal Queenright Hum Zone (90 - 260 Hz • < 90 Hz No Buzz)',
+                  'Normal Queenright Hum Zone (35 - 260 Hz • < 35 Hz No Buzz)',
                   style: TextStyle(fontSize: 10, color: Colors.black54, fontWeight: FontWeight.w500),
                 ),
               ),
@@ -1024,7 +1024,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 rangeAnnotations: RangeAnnotations(
                   horizontalRangeAnnotations: [
                     HorizontalRangeAnnotation(
-                      y1: 90.0,
+                      y1: 35.0,
                       y2: 260.0,
                       color: const Color(0xFF10B981).withAlpha(25),
                     ),
@@ -1033,7 +1033,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                 extraLinesData: ExtraLinesData(
                   horizontalLines: [
                     HorizontalLine(
-                      y: 90.0,
+                      y: 35.0,
                       color: const Color(0xFFEF4444).withAlpha(150),
                       strokeWidth: 1,
                       dashArray: [3, 3],
@@ -1115,7 +1115,7 @@ class _InteractiveHistoryViewState extends State<InteractiveHistoryView> {
                       getDotPainter: (spot, percent, barData, index) {
                         final hz = spot.y;
                         final isHigh = hz >= 300.0;
-                        final isNoBuzz = hz > 0.0 && hz < 90.0;
+                        final isNoBuzz = hz > 0.0 && hz < 35.0;
                         return FlDotCirclePainter(
                           radius: 3.5,
                           color: (isHigh || isNoBuzz) ? const Color(0xFFD32F2F) : const Color(0xFF8B5CF6),

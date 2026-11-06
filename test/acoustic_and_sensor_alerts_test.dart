@@ -462,27 +462,27 @@ void main() {
       expect(afterAi?.queenAcceptedDetected, isTrue);
       expect(afterAi?.explanation, contains('TFLite Model'));
 
-      // Verify that frequencies in Mel Bands 0-3 (0-89 Hz) classify as No Buzz Detected
+      // Verify that infrasound frequencies (< 35 Hz) classify as No Buzz Detected
       // while preserving and displaying the received Hz value
       hiveService.updateFromBackendTelemetry([
         {
           'device_id': 'BW-AI-TEST',
           'temperature': 34.0,
           'humidity': 60.0,
-          'frequency': 65,
-          'frequency_hz': 65,
+          'frequency': 20,
+          'frequency_hz': 20,
         }
       ]);
       final lowRumble = hiveService.getHiveById('hive_ai_test')!;
       expect(lowRumble.conditionLabel, 'No Buzz Detected');
-      expect(lowRumble.acoustic, '65 Hz');
-      expect(lowRumble.acousticStatus, 'No Buzz (65 Hz)');
+      expect(lowRumble.acoustic, '20 Hz');
+      expect(lowRumble.acousticStatus, 'No Buzz (20 Hz)');
       expect(lowRumble.isLowFreqNoBuzz, isTrue);
       expect(lowRumble.isAcousticNotDetected, isFalse);
       expect(lowRumble.isNoBuzzDetected, isTrue);
     });
 
-    test('sub-90 Hz transmitted frequency is preserved and displayed as transmitted Hz rather than fixed 8 Hz artifact', () {
+    test('sub-35 Hz transmitted frequency is preserved and displayed as transmitted Hz rather than fixed 8 Hz artifact', () {
       final testHive = HiveData(
         id: 'hive_sub90_farm_node',
         name: 'Farm Node Hive',
@@ -492,8 +492,8 @@ void main() {
         healthScore: 30,
         temperature: '27.1',
         humidity: '80',
-        acoustic: '77 Hz',
-        acousticStatus: 'No Buzz (77 Hz)',
+        acoustic: '20 Hz',
+        acousticStatus: 'No Buzz (20 Hz)',
         updated: 'Just now',
         isAlert: false,
         alertLabel: 'Normal',
@@ -501,23 +501,23 @@ void main() {
       );
       hiveService.addHive(testHive);
 
-      // 1. Ingest live telemetry with 77 Hz (< 90 Hz)
+      // 1. Ingest live telemetry with 20 Hz (< 35 Hz)
       hiveService.updateFromBackendTelemetry([
         {
           'device_id': 'BW-013230',
           'temperature': 27.1,
           'humidity': 80.8,
-          'frequency': 77,
-          'frequency_hz': 77,
+          'frequency': 20,
+          'frequency_hz': 20,
         }
       ]);
 
       var updated = hiveService.getHiveById('hive_sub90_farm_node');
-      expect(updated?.acoustic, '77 Hz');
-      expect(updated?.acousticStatus, 'No Buzz (77 Hz)');
+      expect(updated?.acoustic, '20 Hz');
+      expect(updated?.acousticStatus, 'No Buzz (20 Hz)');
       expect(updated?.conditionLabel, 'No Buzz Detected');
 
-      // 2. An FFT Bin 1 artifact (8 Hz) from a quiet WAV clip should NOT overwrite the transmitted 77 Hz
+      // 2. An FFT Bin 1 artifact (8 Hz) from a quiet WAV clip should NOT overwrite the transmitted 20 Hz
       hiveService.applyAiModelPrediction(
         deviceId: 'BW-013230',
         recordingEpoch: DateTime.now().millisecondsSinceEpoch,
@@ -527,40 +527,58 @@ void main() {
       );
 
       updated = hiveService.getHiveById('hive_sub90_farm_node');
-      expect(updated?.acoustic, '77 Hz');
-      expect(updated?.acousticStatus, 'No Buzz (77 Hz)');
+      expect(updated?.acoustic, '20 Hz');
+      expect(updated?.acousticStatus, 'No Buzz (20 Hz)');
       expect(updated?.conditionLabel, 'No Buzz Detected');
 
-      // 3. New telemetry with 58 Hz updates cleanly to 58 Hz (not fixed 8 Hz)
+      // 3. New telemetry with 28 Hz updates cleanly to 28 Hz (not fixed 8 Hz)
       hiveService.updateFromBackendTelemetry([
         {
           'device_id': 'BW-013230',
           'temperature': 27.5,
           'humidity': 79.5,
-          'frequency': 58,
-          'frequency_hz': 58,
+          'frequency': 28,
+          'frequency_hz': 28,
         }
       ]);
 
       updated = hiveService.getHiveById('hive_sub90_farm_node');
-      expect(updated?.acoustic, '58 Hz');
-      expect(updated?.acousticStatus, 'No Buzz (58 Hz)');
+      expect(updated?.acoustic, '28 Hz');
+      expect(updated?.acousticStatus, 'No Buzz (28 Hz)');
       expect(updated?.conditionLabel, 'No Buzz Detected');
     });
 
-    testWidgets('AcousticSignalVisualizer displays received Hz when 1-89 Hz classifies as No Buzz Detected', (tester) async {
+    test('35-89 Hz bee cluster buzz (e.g. 50-77 Hz from farm node) is classified as Queen Present / active colony', () {
+      hiveService.updateFromBackendTelemetry([
+        {
+          'device_id': 'BW-013230',
+          'temperature': 27.1,
+          'humidity': 80.8,
+          'frequency': 54,
+          'frequency_hz': 54,
+        }
+      ]);
+      final activeHive = hiveService.getHiveById('hive_sub90_farm_node')!;
+      expect(activeHive.conditionLabel, 'Queen Present');
+      expect(activeHive.acoustic, '54 Hz');
+      expect(activeHive.acousticStatus, 'Normal');
+      expect(activeHive.isNoBuzzDetected, isFalse);
+      expect(activeHive.isQueenPresentDetected, isTrue);
+    });
+
+    testWidgets('AcousticSignalVisualizer displays received Hz when < 35 Hz classifies as No Buzz Detected', (tester) async {
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(
             body: AcousticSignalVisualizer(
-              acoustic: '65 Hz',
-              acousticStatus: 'No Buzz (65 Hz)',
+              acoustic: '20 Hz',
+              acousticStatus: 'No Buzz (20 Hz)',
               conditionLabel: 'No Buzz Detected',
             ),
           ),
         ),
       );
-      expect(find.text('65 Hz • No Buzz'), findsOneWidget);
+      expect(find.text('20 Hz • No Buzz'), findsOneWidget);
     });
 
     test('Microphone disconnect (0 Hz) triggers push notification even after recovery to 1-89 Hz or normal', () async {

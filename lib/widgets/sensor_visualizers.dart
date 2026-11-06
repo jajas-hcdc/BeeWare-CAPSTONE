@@ -444,11 +444,12 @@ class AcousticSignalVisualizer extends StatelessWidget {
         acousticClean == '0 hz' ||
         acousticClean.startsWith('0 ') ||
         statusClean.contains('not detected') ||
-        statusClean.contains('0 hz') ||
+        statusClean == '0 hz' ||
+        RegExp(r'(^|\s|\()0\s*hz').hasMatch(statusClean) ||
         statusClean.contains('offline');
 
     final isLowFreqNoBuzz = !isNotDetected &&
-        ((parsedHz > 0 && parsedHz < 90) ||
+        ((parsedHz > 0 && parsedHz < 35) ||
             conditionLabel.toLowerCase().contains('no buzz') ||
             statusClean.contains('no buzz'));
 
@@ -458,7 +459,7 @@ class AcousticSignalVisualizer extends StatelessWidget {
       heights = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1];
     } else if (isLowFreqNoBuzz) {
       barColor = const Color(0xFFD32F2F);
-      // Low 0-89 Hz rumble bars (Bands 0-3)
+      // Low 0-34 Hz rumble bars
       heights = [0.22, 0.28, 0.25, 0.18, 0.24, 0.20, 0.15, 0.22, 0.18, 0.15, 0.20, 0.16, 0.14, 0.18, 0.15];
     } else {
       final condition = conditionLabel.toLowerCase();

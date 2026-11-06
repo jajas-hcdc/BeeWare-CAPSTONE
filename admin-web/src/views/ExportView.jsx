@@ -279,7 +279,7 @@ export default function ExportView() {
                 <tr>
                   <td className="p-2 border-r border-slate-300 font-medium">Dominant Buzz Frequency</td>
                   <td className="p-2 border-r border-slate-300 font-mono font-bold">99 Hz – 150 Hz</td>
-                  <td className="p-2 border-r border-slate-300 font-mono">90 Hz – 260 Hz</td>
+                  <td className="p-2 border-r border-slate-300 font-mono">35 Hz – 260 Hz</td>
                   <td className="p-2 text-emerald-800 font-bold">Queenright Worker Hum</td>
                 </tr>
                 <tr>

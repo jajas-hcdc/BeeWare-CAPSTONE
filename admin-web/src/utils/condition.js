@@ -3,7 +3,7 @@
  * Unifies queen condition classification and badge color styling across the console.
  * 
  * Rules:
- * - RED for: 'Queen Absent', 'No Buzz Detected' (or freq <= 0 / < 90 Hz / acoustic not detected)
+ * - RED for: 'Queen Absent', 'No Buzz Detected' (or freq <= 0 / < 35 Hz / acoustic not detected)
  * - AMBER for: 'Queen Rejected'
  * - SKY BLUE for: 'Queen Accepted'
  * - EMERALD GREEN for: 'Queen Present'
@@ -24,8 +24,8 @@ export function getConditionInfo(condition, freq) {
   const raw = (condition || '').trim();
   const c = raw.toLowerCase();
 
-  // 1. Check for silence / low frequency (< 90 Hz) / microphone not detected
-  const isFreqSilent = fNum !== null && (fNum <= 0 || fNum < 90);
+  // 1. Check for silence / low frequency (< 35 Hz) / microphone not detected
+  const isFreqSilent = fNum !== null && (fNum <= 0 || fNum < 35);
   const isAcousticNotDetected = c.includes('no buzz') || 
                                 c.includes('not detected') || 
                                 (typeof freq === 'string' && freq.toLowerCase().includes('not detected'));

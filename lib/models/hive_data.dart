@@ -142,7 +142,7 @@ class HiveData {
   bool get isLowFreqNoBuzz {
     if (isAcousticNotDetected) return false;
     final f = parsedFrequencyHz;
-    return (f > 0 && f < 90) ||
+    return (f > 0 && f < 35) ||
         conditionLabel.toLowerCase().contains('no buzz') ||
         acousticStatus.toLowerCase().contains('no buzz');
   }
@@ -283,8 +283,8 @@ class HiveData {
                 acousticRaw.trim().startsWith('0 ') ||
                 acousticStatusRaw.toLowerCase().contains('not detected')));
 
-    final bool isFreqBelowBeeBand = freqInt != null && freqInt > 0 && freqInt < 90;
-    final bool isFreqQueenPresent = freqInt != null && ((freqInt >= 90 && freqInt <= 260) || freqInt >= 500);
+    final bool isFreqBelowBeeBand = freqInt != null && freqInt > 0 && freqInt < 35;
+    final bool isFreqQueenPresent = freqInt != null && ((freqInt >= 35 && freqInt <= 260) || freqInt >= 500);
     final bool isFreqQueenAbsent = freqInt != null && freqInt >= 300 && freqInt < 500;
 
     if ((isAcousticZero || isFreqBelowBeeBand) && (condition == 'Queen Present' || condition.isEmpty)) {
