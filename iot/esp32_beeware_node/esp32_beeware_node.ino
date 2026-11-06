@@ -46,7 +46,7 @@ const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebase
 #define WDT_TIMEOUT_SECONDS 60        // 60 seconds hardware watchdog timeout
 #define RECORD_TIME_SECONDS 3.0       // 3.0 seconds audio
 #define SAMPLE_RATE         16000     // 16kHz studio sample rate
-#define VOLUME_GAIN         4         // Digital gain boost
+#define VOLUME_GAIN         1         // Digital gain boost (standard unamplified 16-bit PCM)
 
 // INMP441 I2S Pins
 #define I2S_WS              25        // Word Select (WS / LRCL)
@@ -214,11 +214,10 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
   size_t samplesReadTotal = 0;
   uint32_t startMs = millis();
 
-  const int32_t NOISE_THRESHOLD = 25;
+  const int32_t NOISE_THRESHOLD = 50;
   int zeroCrossings = 0;
   int prevSign = 0;
   int32_t dcEstimate = 0;
-  int32_t lpStage1 = 0;
   int32_t lowPassSample = 0;
   bool dcInitialized = false;
 
@@ -233,17 +232,15 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
         int32_t rawShifted = (chunkRaw[i] >> 16);
         if (!dcInitialized) {
           dcEstimate = rawShifted;
-          lpStage1 = 0;
           lowPassSample = 0;
           dcInitialized = true;
         } else {
           dcEstimate = (dcEstimate * 63 + rawShifted) / 64;
         }
         int32_t sample = (rawShifted - dcEstimate);
-        // 2-stage cascaded low-pass filter (~450 Hz cutoff) to suppress 500-4000 Hz cricket chirps & rain patter
-        // before counting zero-crossings, isolating the true 90-480 Hz honeybee colony fundamental
-        lpStage1 = (lpStage1 * 7 + sample) / 8;
-        lowPassSample = (lowPassSample * 7 + lpStage1) / 8;
+        // Single-stage low-pass filter (~630 Hz cutoff) to suppress high-frequency cricket noise
+        // while preserving the true 110-260 Hz honeybee colony fundamental buzzing
+        lowPassSample = (lowPassSample * 3 + sample) / 4;
 
         int32_t absSample = abs(lowPassSample);
         if (absSample > peakVal) peakVal = absSample;
@@ -256,7 +253,7 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
     }
   }
 
-  if (peakVal < 25 || zeroCrossings < 2 || samplesReadTotal == 0) {
+  if (peakVal < 45 || zeroCrossings < 2 || samplesReadTotal == 0) {
     freqHz = 0;
     Serial.println("⚠️ [INMP441] Acoustic silence / not detected (0 Hz)");
   } else {
