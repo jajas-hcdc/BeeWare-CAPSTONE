@@ -1,25 +1,3 @@
-/*
- * =========================================================================================
- *  BeeWare ESP32 Firmware v2.0.0 🐝 - 24/7 Cloud Node + Remote HTTP OTA + I2S & DHT22
- *  Hardware: ESP32 + INMP441 (I2S Microphone) + DHT22 Temperature & Humidity Sensor
- *
- *  What's New in v2.0.0:
- *  1. Cloud OTA Firmware Updater (Firebase RTDB + GitHub/HTTPS .bin download via HTTPUpdate)
- *     - Checks /ota/<DEVICE_ID>.json every 5-minute cycle & on boot.
- *     - When a newer "version" and "url" are present in Firebase, downloads the .bin,
- *       flashes itself over Wi-Fi from anywhere, and reboots automatically.
- *  2. Hardware Watchdog Timer (esp_task_wdt, 60s timeout)
- *     - Automatically recovers and reboots the ESP32 if Wi-Fi/SSL ever hangs 24/7.
- *  3. Self-Healing Wi-Fi + NTP Re-Sync
- *     - Automatically reconnects before every 5-minute cycle without wearing out NVS flash.
- *  4. 4 KB Buffered TLS Audio Streaming + Auto-Retry + Low-Pass Acoustic Filter
- *     - Reduces TLS packet count by 8x so 3.0s WAV uploads to /audio_history never drop
- *       on weak field Wi-Fi, and filters out false high-frequency zero-crossing spikes.
- *  5. Bounded 20-Slot Ring Buffer for /telemetry_history
- *     - Prevents Firebase Realtime Database storage from ever filling up during 24/7 operation.
- * =========================================================================================
- */
-
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
