@@ -10,7 +10,7 @@
 #include "soc/rtc_cntl_reg.h"
 
 // ======================== FIRMWARE VERSION ========================
-#define FIRMWARE_VERSION    "2.0.2"
+#define FIRMWARE_VERSION    "2.0.3"
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Honea Bee Farm Guest";
@@ -24,7 +24,7 @@ const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebase
 #define WDT_TIMEOUT_SECONDS 60        // 60 seconds hardware watchdog timeout
 #define RECORD_TIME_SECONDS 3.0       // 3.0 seconds audio
 #define SAMPLE_RATE         16000     // 16kHz studio sample rate
-#define VOLUME_GAIN         1         // Digital gain boost (standard unamplified 16-bit PCM)
+#define VOLUME_GAIN         6         // Digital gain boost (6x for clean, audible bee buzzing without clipping)
 
 // INMP441 I2S Pins
 #define I2S_WS              25        // Word Select (WS / LRCL)
@@ -188,6 +188,17 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
 
   const size_t CHUNK_SAMPLES = 192;
   int32_t chunkRaw[CHUNK_SAMPLES];
+
+  // Discard first 3,200 samples (0.2s) of INMP441 startup/settling transient
+  size_t discardLeft = 3200;
+  while (discardLeft > 0) {
+    size_t toDiscard = min(CHUNK_SAMPLES, discardLeft);
+    size_t bytesRead = 0;
+    i2s_channel_read(rx_handle, chunkRaw, toDiscard * sizeof(int32_t), &bytesRead, 50);
+    if (bytesRead == 0) break;
+    discardLeft -= (bytesRead / sizeof(int32_t));
+  }
+
   size_t totalSamplesToMeasure = (size_t)(SAMPLE_RATE * 1.5);
   size_t samplesReadTotal = 0;
   uint32_t startMs = millis();
@@ -207,7 +218,10 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
     if (err == ESP_OK && bytesRead > 0) {
       size_t count = bytesRead / sizeof(int32_t);
       for (size_t i = 0; i < count; i++) {
-        int32_t rawShifted = (chunkRaw[i] >> 16);
+        int32_t rawShifted = (chunkRaw[i] >> 16) * VOLUME_GAIN;
+        if (rawShifted > 32767) rawShifted = 32767;
+        if (rawShifted < -32768) rawShifted = -32768;
+
         if (!dcInitialized) {
           dcEstimate = rawShifted;
           lowPassSample = 0;
@@ -432,6 +446,16 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
       i2s_channel_disable(rx_handle);
       delay(10);
       i2s_channel_enable(rx_handle);
+
+      // Discard first 3,200 samples (0.2s) of INMP441 startup/settling transient
+      size_t discardLeft = 3200;
+      while (discardLeft > 0) {
+        size_t toDiscard = min(READ_SAMPLES, discardLeft);
+        size_t bytesRead = 0;
+        i2s_channel_read(rx_handle, chunkRaw, toDiscard * sizeof(int32_t), &bytesRead, 50);
+        if (bytesRead == 0) break;
+        discardLeft -= (bytesRead / sizeof(int32_t));
+      }
     }
 
     size_t samplesRecorded = 0;
@@ -449,7 +473,7 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
       if (err == ESP_OK && bytesRead > 0) {
         size_t readSamples = bytesRead / sizeof(int32_t);
         for (size_t i = 0; i < readSamples; i++) {
-          int32_t sample = (chunkRaw[i] >> 16);
+          int32_t sample = (chunkRaw[i] >> 16) * VOLUME_GAIN;
           if (sample > 32767) sample = 32767;
           if (sample < -32768) sample = -32768;
           batchPcm[batchCount++] = (int16_t)sample;
