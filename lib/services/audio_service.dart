@@ -319,7 +319,7 @@ class AudioService extends ChangeNotifier {
       if (prevInferred != null &&
           prevInferred.createdAt == clip.createdAt &&
           prevInferred.frequencyHz != 8 &&
-          (prevInferred.frequencyHz >= 35 || clip.audioBase64 == null || clip.audioBase64!.trim().isEmpty)) {
+          (prevInferred.frequencyHz >= 80 || clip.audioBase64 == null || clip.audioBase64!.trim().isEmpty)) {
         trimmed[i] = clip.copyWith(
           frequency: prevInferred.frequencyHz,
           condition: prevInferred.condition,
@@ -357,10 +357,10 @@ class AudioService extends ChangeNotifier {
           // For quiet / sub-90 Hz audio, FFT bin 1 (8 Hz) is a 1/f noise floor artifact;
           // preserve the actual frequency transmitted by the ESP32 hardware device.
           final measuredHz = await AudioProcessor.computeDominantFrequencyHz(bytes);
-          if (measuredHz >= 35) {
+          if (measuredHz >= 80) {
             effectiveHz = measuredHz;
           } else if (clip.frequency > 0 && clip.frequency != 8) {
-            // Preserve the hardware-transmitted frequency (e.g. 58 Hz, 77 Hz) for sub-35 Hz
+            // Preserve the hardware-transmitted frequency (e.g. 58 Hz, 77 Hz) for sub-80 Hz
             effectiveHz = clip.frequency;
           } else if (measuredHz > 0 && measuredHz != 8) {
             effectiveHz = measuredHz;
@@ -370,7 +370,7 @@ class AudioService extends ChangeNotifier {
         }
       }
 
-      if (effectiveHz < 35) {
+      if (effectiveHz < 80) {
         // If effectiveHz ended up at <= 8 (e.g. from FFT bin 1 artifact), check what Hz is actually being transmitted
         if (effectiveHz <= 8) {
           if (clip.frequency > 0 && clip.frequency != 8) {

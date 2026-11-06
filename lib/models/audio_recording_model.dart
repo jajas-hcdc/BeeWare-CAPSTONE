@@ -100,7 +100,7 @@ class AudioRecordingModel {
       deviceId: (data['device_id'] ?? data['deviceId'] ?? 'BW-001').toString(),
       slot: slot,
       frequency: parsedFreq,
-      condition: (data['condition'] ?? data['conditionLabel'] ?? (parsedFreq >= 35 ? 'Queen Present' : 'No Buzz Detected')).toString(),
+      condition: (data['condition'] ?? data['conditionLabel'] ?? (parsedFreq >= 80 ? 'Queen Present' : 'No Buzz Detected')).toString(),
       temperature: temp,
       humidity: hum,
       timestamp: (data['timestamp'] ?? 'Just now').toString(),

@@ -333,7 +333,7 @@ export default function HiveDetailView({ hive, onBack, onShowQr }) {
   const isTempNotDetected = currentTemp <= 0 || telemetry?.temperature === '0' || telemetry?.temperature === '0.0';
   const isHumNotDetected = currentHum <= 0 || telemetry?.humidity === '0' || telemetry?.humidity === '0.0';
   const isAcousticNotDetected = pitchHz <= 0 || rawPitch.toLowerCase().includes('not detected');
-  const isLowFreqNoBuzz = !isAcousticNotDetected && pitchHz < 35;
+  const isLowFreqNoBuzz = !isAcousticNotDetected && pitchHz < 80;
   const isAnyNoBuzz = isAcousticNotDetected || isLowFreqNoBuzz;
   const hasSensorNotDetected = isTempNotDetected || isHumNotDetected || isAcousticNotDetected;
 
@@ -351,8 +351,8 @@ export default function HiveDetailView({ hive, onBack, onShowQr }) {
     overviewDesc = 'No buzz detected (0 Hz / Silent). Acoustic activity is absent or microphone is disconnected.';
     conditionActionDesc = 'No Buzz Detected (0 Hz).\nInspect microphone or check hive activity.';
   } else if (isLowFreqNoBuzz) {
-    overviewDesc = `Low frequency received (${pitchHz} Hz < 35 Hz). Classified as No Buzz Detected.`;
-    conditionActionDesc = `No Buzz Detected (${pitchHz} Hz).\nFrequency is below the 35 Hz bee acoustic range.`;
+    overviewDesc = `Low frequency received (${pitchHz} Hz < 80 Hz). Classified as No Buzz Detected.`;
+    conditionActionDesc = `No Buzz Detected (${pitchHz} Hz).\nFrequency is below the 80 Hz bee acoustic range.`;
   } else if (conditionLabel.toLowerCase().includes('absent')) {
     overviewDesc = 'Acoustic frequency indicates Queenless Roar. Urgent frame inspection needed.';
     conditionActionDesc = 'Urgent Intervention Required.\nInspect brood frames for emergency queen cells.';
@@ -1234,7 +1234,7 @@ export default function HiveDetailView({ hive, onBack, onShowQr }) {
 
             <div className="flex items-center gap-2 text-[11px] text-slate-500 font-medium">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
-              <span>Normal Queenright Hum Zone (35 - 260 Hz • &lt; 35 Hz No Buzz)</span>
+              <span>Normal Queenright Hum Zone (80 - 260 Hz • &lt; 80 Hz No Buzz)</span>
             </div>
 
             {/* Swipable chart wrapper */}
@@ -1248,8 +1248,8 @@ export default function HiveDetailView({ hive, onBack, onShowQr }) {
                     contentStyle={{ fontSize: 11, borderRadius: 8, borderColor: '#e2e8f0' }} 
                     labelFormatter={(label, payload) => payload?.[0]?.payload?.fullDate || label}
                   />
-                  <ReferenceArea y1={35} y2={260} fill="#10b981" fillOpacity={0.12} />
-                  <ReferenceLine y={35} stroke="#ef4444" strokeDasharray="2 2" />
+                  <ReferenceArea y1={80} y2={260} fill="#10b981" fillOpacity={0.12} />
+                  <ReferenceLine y={80} stroke="#ef4444" strokeDasharray="2 2" />
                   <Area type="monotone" dataKey="pitch" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.15} strokeWidth={2.4} dot={{ r: 3, fill: '#8b5cf6' }} />
                 </AreaChart>
               </ResponsiveContainer>

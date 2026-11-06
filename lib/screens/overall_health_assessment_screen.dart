@@ -274,7 +274,7 @@ class OverallHealthAssessmentScreen extends StatelessWidget {
                             : (absentCount > 0 || rejectedCount > 0
                                 ? '⚠️ Attention Needed: $absentCount hive(s) detected with Queen Absent and $rejectedCount hive(s) with Queen Rejected. Prioritize physical inspections of affected boxes immediately to check for emergency queen cups or introduce new mated queens.'
                                 : (noBuzzHives.isNotEmpty
-                                    ? '⚠️ No Buzz Detected: ${noBuzzHives.length} hive(s) (${noBuzzHives.map((h) => "${h.name}: ${h.acoustic}").join(", ")}) currently have no bee buzz detected (< 35 Hz). Inspect microphone hardware connections or verify colony acoustic activity.'
+                                    ? '⚠️ No Buzz Detected: ${noBuzzHives.length} hive(s) (${noBuzzHives.map((h) => "${h.name}: ${h.acoustic}").join(", ")}) currently have no bee buzz detected (< 80 Hz). Inspect microphone hardware connections or verify colony acoustic activity.'
                                     : '✅ All $totalHives monitored colonies are exhibiting normal acoustic buzzing and brood thermoregulation. Continue standard routine apiary checks and maintain clean water sources nearby.')),
                         style: const TextStyle(fontSize: 12, color: Colors.black87, height: 1.4),
                       ),

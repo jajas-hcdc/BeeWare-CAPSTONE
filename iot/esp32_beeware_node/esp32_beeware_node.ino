@@ -283,11 +283,11 @@ void sendTelemetryToFirebase(float temp, float hum, int battery, int rssi, int32
   String conditionLabel = "Queen Present";
   int confidenceVal = 95, healthScoreVal = 95;
 
-  if (freqHz == 0 || freqHz < 35) {
+  if (freqHz == 0 || freqHz < 80) {
     conditionLabel = "No Buzz Detected";
     confidenceVal = 60;
     healthScoreVal = 30;
-  } else if (freqHz >= 35 && freqHz <= 260) {
+  } else if (freqHz >= 80 && freqHz <= 260) {
     conditionLabel = "Queen Present";
     confidenceVal = 95;
     healthScoreVal = 95;
@@ -398,7 +398,7 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
 
   int slot = audioSlotCounter % 5;
   String deviceId = getDeviceId();
-  String condition = (freqHz >= 300 && freqHz < 500) ? "Queen Absent" : (freqHz >= 35 ? "Queen Present" : "No Buzz Detected");
+  String condition = (freqHz >= 300 && freqHz < 500) ? "Queen Absent" : (freqHz >= 80 ? "Queen Present" : "No Buzz Detected");
 
   size_t totalSamples = (size_t)(SAMPLE_RATE * RECORD_TIME_SECONDS);
   size_t totalB64Chars = (totalSamples * sizeof(int16_t) * 4) / 3;

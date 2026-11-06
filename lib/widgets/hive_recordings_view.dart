@@ -102,7 +102,7 @@ class _HiveRecordingsViewState extends State<HiveRecordingsView> {
                   ),
                   child: const Column(
                     children: [
-                      Text('35–260 Hz', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1B5E20))),
+                      Text('80–260 Hz', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1B5E20))),
                       Text('Worker Hum', style: TextStyle(fontSize: 9, color: Color(0xFF2E7D32))),
                     ],
                   ),

@@ -86,7 +86,7 @@ class ModelService {
     Uint8List wavBytes, {
     int frequencyHz = 0,
   }) async {
-    if (frequencyHz < 35) {
+    if (frequencyHz < 80) {
       return {
         'prediction': 'No Buzz Detected',
         'confidence': 0.60,
@@ -114,7 +114,7 @@ class ModelService {
     int? frequencyHz,
   }) async {
     try {
-      if (frequencyHz != null && frequencyHz < 35) {
+      if (frequencyHz != null && frequencyHz < 80) {
         return {
           'prediction': 'No Buzz Detected',
           'confidence': 0.60,
@@ -235,14 +235,14 @@ class ModelService {
       }
 
       // Fuse TFLite dual-head probabilities with Mel-band harmonic signatures and INMP441 Hz
-      if (frequencyHz != null && frequencyHz >= 35) {
+      if (frequencyHz != null && frequencyHz >= 80) {
         // Check if the 90-280 Hz Queen Present band (Mel Bands 4-12) is stronger than the 300-600 Hz distress band (Mel Bands 13-27).
         // When crickets/rain (500-4000 Hz) inflate zero-crossing Hz above 300 Hz while the colony is calm,
         // dbBands4to12 remains stronger than dbBands13to27.
         final bool queenPresentBandDominates = dbBands4to12 >= (dbBands13to27 - 1.5);
         final bool isExternalHighHzSpike = frequencyHz >= 500;
 
-        if ((frequencyHz >= 35 && frequencyHz <= 260) || isExternalHighHzSpike || (frequencyHz >= 300 && queenPresentBandDominates)) {
+        if ((frequencyHz >= 80 && frequencyHz <= 260) || isExternalHighHzSpike || (frequencyHz >= 300 && queenPresentBandDominates)) {
           // Mel Bands 4-12 (90-260 Hz) or external >= 500 Hz cricket/rain spike over a calm colony:
           final bool hasPipingHarmonics = !isExternalHighHzSpike && (dbBands28to45 - dbBands4to12) > -14.0;
           calibratedWeights[2] *= 2.4 * (0.5 + presenceSoftmax[0]); // Queen Present
