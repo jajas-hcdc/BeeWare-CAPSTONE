@@ -410,7 +410,10 @@ class AudioService extends ChangeNotifier {
           );
         }
       } else {
-        final String fallbackCondition = clip.condition.toLowerCase().contains('no buzz') || clip.condition.trim().isEmpty
+        final bool isCalmWorkerHz = (effectiveHz >= 80 && effectiveHz <= 260) || effectiveHz >= 500;
+        final String fallbackCondition = clip.condition.toLowerCase().contains('no buzz') ||
+                clip.condition.trim().isEmpty ||
+                (isCalmWorkerHz && clip.condition.toLowerCase().contains('absent'))
             ? ((effectiveHz >= 300 && effectiveHz < 500) ? 'Queen Absent' : 'Queen Present')
             : clip.condition;
         String resolvedCondition = fallbackCondition;
@@ -430,6 +433,9 @@ class AudioService extends ChangeNotifier {
           } catch (e) {
             debugPrint('ℹ️ ESP32 audio TFLite inference skipped: $e');
           }
+        }
+        if (isCalmWorkerHz && resolvedCondition.toLowerCase().contains('absent')) {
+          resolvedCondition = 'Queen Present';
         }
 
         _inferredClipsByDevice[cacheKey] = (

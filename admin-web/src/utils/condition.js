@@ -41,8 +41,10 @@ export function getConditionInfo(condition, freq) {
     };
   }
 
-  // 2. Queen Absent (RED)
-  if (c.includes('absent')) {
+  // 2. Queen Absent (RED) — only valid when frequency is in the 300-499 Hz queenless roar band (or unknown)
+  // If dominant pitch is in the calm 80-260 Hz worker hum band (or >= 500 Hz external spike), reconcile to Queen Present
+  const isCalmWorkerBand = fNum !== null && ((fNum >= 80 && fNum <= 260) || fNum >= 500);
+  if (c.includes('absent') && !isCalmWorkerBand) {
     return {
       label: raw || 'Queen Absent',
       badgeClass: 'text-red-700 bg-red-50 border border-red-200',

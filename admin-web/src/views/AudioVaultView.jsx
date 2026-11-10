@@ -79,6 +79,131 @@ function pcmBase64ToWavBlob(base64Data, sampleRate = 16000) {
   }
 }
 
+/**
+ * Extracts the true dominant acoustic frequency (Hz) from Base64 16-bit 16kHz PCM/WAV audio
+ * using a 2048-point Hann-windowed FFT with sub-bass DC drift and rain-splatter guardrails.
+ */
+function computeDominantPitchHz(base64Data, fallbackHz = 0, sampleRate = 16000) {
+  if (!base64Data) return fallbackHz;
+  try {
+    const cleanBase64 = base64Data.trim().replace(/[\r\n\s]/g, '');
+    const binaryString = window.atob(cleanBase64);
+    const len = binaryString.length;
+    if (len < 512) return fallbackHz;
+
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    let dataStart = 0;
+    if (len >= 44 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+      dataStart = 44;
+    }
+    const totalFrames = Math.floor((len - dataStart) / 2);
+    if (totalFrames < 2048) return fallbackHz;
+
+    const view = new DataView(bytes.buffer, dataStart, totalFrames * 2);
+    const samples = new Float64Array(totalFrames);
+    let sum = 0;
+    for (let i = 0; i < totalFrames; i++) {
+      const s = view.getInt16(i * 2, true) / 32768.0;
+      samples[i] = s;
+      sum += s;
+    }
+    const mean = sum / totalFrames;
+    let maxAc = 0;
+    for (let i = 0; i < totalFrames; i++) {
+      const ac = samples[i] - mean;
+      samples[i] = ac;
+      const absAc = Math.abs(ac);
+      if (absAc > maxAc) maxAc = absAc;
+    }
+    if (maxAc < 0.0015) return fallbackHz;
+
+    const nFft = 2048;
+    const hop = 512;
+    const win = new Float64Array(nFft);
+    for (let i = 0; i < nFft; i++) {
+      win[i] = 0.5 * (1.0 - Math.cos((2.0 * Math.PI * i) / (nFft - 1)));
+    }
+
+    const maxBin = Math.min(nFft / 2, Math.ceil((490.0 * nFft) / sampleRate));
+    const minBin = Math.max(1, Math.floor((8.0 * nFft) / sampleRate));
+    const avgPower = new Float64Array(maxBin + 1);
+    let frameCount = 0;
+
+    for (let start = 0; start + nFft <= totalFrames; start += hop) {
+      for (let k = minBin; k <= maxBin; k++) {
+        let re = 0;
+        let im = 0;
+        const w = (2.0 * Math.PI * k) / nFft;
+        for (let i = 0; i < nFft; i++) {
+          const x = samples[start + i] * win[i];
+          re += x * Math.cos(w * i);
+          im -= x * Math.sin(w * i);
+        }
+        avgPower[k] += re * re + im * im;
+      }
+      frameCount++;
+    }
+    if (frameCount === 0) return fallbackHz;
+
+    let bestBin = minBin;
+    let bestPower = -1;
+    for (let k = minBin; k <= maxBin; k++) {
+      if (avgPower[k] > bestPower) {
+        bestPower = avgPower[k];
+        bestBin = k;
+      }
+    }
+
+    const beeMinBin = Math.max(minBin, Math.ceil((80.0 * nFft) / sampleRate));
+    const beeMaxBin = Math.min(maxBin, Math.ceil((260.0 * nFft) / sampleRate));
+    let rawHz = Math.round((bestBin * sampleRate) / nFft);
+
+    if (rawHz < 80 && beeMinBin <= maxBin) {
+      let bestBeeBin = beeMinBin;
+      let bestBeePower = -1;
+      let bestWeighted = -1;
+      for (let k = beeMinBin; k <= maxBin; k++) {
+        const ws = avgPower[k] * k;
+        if (ws > bestWeighted) {
+          bestWeighted = ws;
+          bestBeePower = avgPower[k];
+          bestBeeBin = k;
+        }
+      }
+      if (bestBeePower / frameCount >= 0.5 && bestBeePower >= bestPower * 0.0001) {
+        bestBin = bestBeeBin;
+        bestPower = bestBeePower;
+        rawHz = Math.round((bestBin * sampleRate) / nFft);
+      }
+    }
+
+    if (rawHz >= 300 && beeMinBin <= beeMaxBin) {
+      let bestPresentBin = beeMinBin;
+      let bestPresentPower = -1;
+      for (let k = beeMinBin; k <= beeMaxBin; k++) {
+        if (avgPower[k] > bestPresentPower) {
+          bestPresentPower = avgPower[k];
+          bestPresentBin = k;
+        }
+      }
+      if (bestPresentPower >= bestPower * 0.45) {
+        bestBin = bestPresentBin;
+      }
+    }
+
+    const measuredHz = Math.round((bestBin * sampleRate) / nFft);
+    if (measuredHz >= 80) return measuredHz;
+    if (fallbackHz > 0 && fallbackHz !== 8) return fallbackHz;
+    return measuredHz > 0 && measuredHz !== 8 ? measuredHz : fallbackHz;
+  } catch {
+    return fallbackHz;
+  }
+}
+
 export default function AudioVaultView() {
   // Hive selection state
   const [hives, setHives] = useState([]);
@@ -220,15 +345,18 @@ export default function AudioVaultView() {
         Object.keys(val).forEach((k) => {
           const item = val[k];
           if (item && typeof item === 'object') {
+            const rawAudioB64 = item.audioBase64 || item.audio_base64 || item.audio || item.audioUrl || '';
+            const rawStoredFreq = item.frequency || item.frequency_hz || 94;
+            const resolvedFreq = computeDominantPitchHz(rawAudioB64, rawStoredFreq);
             slots.push({
               key: k,
               slot: item.slot !== undefined ? item.slot : k,
               date: item.recorded_date || 'Oct 29, 2026',
               time: item.recorded_time || item.timestamp || 'Recent',
-              freq: item.frequency || item.frequency_hz || 94,
+              freq: resolvedFreq,
               condition: item.condition || 'Queen Present',
               trigger: item.trigger || 'Cooldown Cycle',
-              audioBase64: item.audioBase64 || item.audio_base64 || item.audio || item.audioUrl || '',
+              audioBase64: rawAudioB64,
               createdAt: item.createdAt || item.created_at || 0
             });
           }
