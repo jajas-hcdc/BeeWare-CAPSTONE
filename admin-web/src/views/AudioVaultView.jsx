@@ -195,7 +195,26 @@ function computeDominantPitchHz(base64Data, fallbackHz = 0, sampleRate = 16000) 
       }
     }
 
-    const measuredHz = Math.round((bestBin * sampleRate) / nFft);
+    // Parabolic sub-bin interpolation across [bestBin - 1, bestBin, bestBin + 1]
+    // so frequencies resolve to the exact nearest 1 Hz rather than snapping to 7.8 Hz FFT bins
+    let refinedBin = bestBin;
+    if (bestBin > minBin && bestBin < maxBin) {
+      const pLeft = avgPower[bestBin - 1];
+      const pCenter = avgPower[bestBin];
+      const pRight = avgPower[bestBin + 1];
+      if (pLeft > 0 && pCenter > 0 && pRight > 0 && pCenter >= pLeft && pCenter >= pRight) {
+        const alpha = Math.log(pLeft);
+        const beta = Math.log(pCenter);
+        const gamma = Math.log(pRight);
+        const denom = alpha - 2 * beta + gamma;
+        if (Math.abs(denom) > 1e-12) {
+          const delta = Math.max(-0.5, Math.min(0.5, (0.5 * (alpha - gamma)) / denom));
+          refinedBin = bestBin + delta;
+        }
+      }
+    }
+
+    const measuredHz = Math.round((refinedBin * sampleRate) / nFft);
     if (measuredHz >= 80) return measuredHz;
     if (fallbackHz > 0 && fallbackHz !== 8) return fallbackHz;
     return measuredHz > 0 && measuredHz !== 8 ? measuredHz : fallbackHz;

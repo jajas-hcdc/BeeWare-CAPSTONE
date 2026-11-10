@@ -183,7 +183,26 @@ class AudioProcessor {
       }
     }
 
-    final int dominantHz = ((bestBin * sampleRate) / _nFft).round();
+    // Parabolic sub-bin interpolation across [bestBin - 1, bestBin, bestBin + 1]
+    // so frequencies round off to the exact nearest 1 Hz instead of snapping to 7.8 Hz FFT bins
+    double refinedBin = bestBin.toDouble();
+    if (bestBin > minBin && bestBin < maxBin) {
+      final double pLeft = avgPower[bestBin - 1];
+      final double pCenter = avgPower[bestBin];
+      final double pRight = avgPower[bestBin + 1];
+      if (pLeft > 0 && pCenter > 0 && pRight > 0 && pCenter >= pLeft && pCenter >= pRight) {
+        final double alpha = log(pLeft);
+        final double beta = log(pCenter);
+        final double gamma = log(pRight);
+        final double denom = alpha - 2.0 * beta + gamma;
+        if (denom.abs() > 1e-12) {
+          final double delta = ((0.5 * (alpha - gamma)) / denom).clamp(-0.5, 0.5);
+          refinedBin = bestBin + delta;
+        }
+      }
+    }
+
+    final int dominantHz = ((refinedBin * sampleRate) / _nFft).round();
     return dominantHz.clamp(1, 490);
   }
 
