@@ -387,7 +387,9 @@ export default function AudioVaultView() {
     };
   }, [selectedDeviceId]);
 
-  const activeSlot = audioSlots.find(s => s.key === activeSlotKey) || audioSlots[0];
+  const activeIndex = audioSlots.findIndex(s => s.key === activeSlotKey);
+  const activeSlot = activeIndex >= 0 ? audioSlots[activeIndex] : audioSlots[0];
+  const activeClipNumber = activeIndex >= 0 ? activeIndex + 1 : 1;
   const dominantFreq = activeSlot?.freq || 140;
   const watchdog = getNodeWatchdogStatus(selectedTelemetry);
 
@@ -632,7 +634,7 @@ export default function AudioVaultView() {
     setPlayerError(null);
 
     if (!slot.audioBase64) {
-      setPlayerError(`Slot #${slot.slot} does not contain audio data.`);
+      setPlayerError(`This clip does not contain audio data.`);
       return;
     }
 
@@ -893,7 +895,7 @@ export default function AudioVaultView() {
                 <div className="text-xs font-semibold text-slate-900 flex items-center gap-1.5 flex-wrap">
                   <span className="text-amber-700 font-bold">{currentHive?.name}</span>
                   <span className="text-slate-300 font-normal">·</span>
-                  <span>Slot #{activeSlot.slot}</span>
+                  <span>Clip #{activeClipNumber}</span>
                   <span className="text-slate-300 font-normal">·</span>
                   <span className="font-mono text-slate-500 font-normal">{activeSlot.date} {activeSlot.time}</span>
                 </div>
@@ -1003,10 +1005,10 @@ export default function AudioVaultView() {
         <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
           <div className="px-5 py-3 border-b border-slate-200 bg-slate-50/60 flex items-center justify-between">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              {currentHive?.name} Ring Buffer Audio Slots
+              {currentHive?.name} Ring Buffer Audio Clips
             </h3>
             <span className="text-[11px] font-mono text-slate-500">
-              5-Slot Circular Buffer • Device: {selectedDeviceId}
+              5-Clip Circular Buffer • Device: {selectedDeviceId}
             </span>
           </div>
           <div className="overflow-x-auto">
@@ -1024,11 +1026,11 @@ export default function AudioVaultView() {
               {loading ? (
                 <tr>
                   <td colSpan="5" className="text-center py-8 text-slate-400">
-                    Retrieving audio buffer slots for {currentHive?.name || selectedDeviceId}...
+                    Retrieving audio clips for {currentHive?.name || selectedDeviceId}...
                   </td>
                 </tr>
               ) : (
-                audioSlots.map((slot) => {
+                audioSlots.map((slot, idx) => {
                   const isSelected = activeSlotKey === slot.key;
                   const isThisPlaying = isSelected && isPlaying;
                   const slotKey = `${selectedDeviceId}_${slot.key}`;
@@ -1052,7 +1054,7 @@ export default function AudioVaultView() {
                           >
                             {isThisPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
                           </button>
-                          <span className="font-semibold text-slate-900">Slot #{slot.slot}</span>
+                          <span className="font-semibold text-slate-900">Clip #{idx + 1}</span>
                         </div>
                       </td>
 
