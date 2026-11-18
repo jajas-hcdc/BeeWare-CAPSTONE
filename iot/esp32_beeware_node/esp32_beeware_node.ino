@@ -11,7 +11,7 @@
 #include "soc/rtc_cntl_reg.h"
 
 // ======================== FIRMWARE VERSION ========================
-#define FIRMWARE_VERSION    "2.0.9"
+#define FIRMWARE_VERSION    "2.0.10"
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Honea Bee Farm Guest";
@@ -25,7 +25,7 @@ const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebase
 #define WDT_TIMEOUT_SECONDS 60        // 60 seconds hardware watchdog timeout
 #define RECORD_TIME_SECONDS 3.0       // 3.0 seconds audio
 #define SAMPLE_RATE         16000     // 16kHz studio sample rate
-#define VOLUME_GAIN         10        // Digital gain boost (10x)
+#define VOLUME_GAIN         16        // Digital gain boost (16x clean DC-blocked gain)
 
 // INMP441 I2S Pins
 #define I2S_WS              25        // Word Select (WS / LRCL)
@@ -263,12 +263,9 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
       if (err == ESP_OK && bytesRead > 0) {
         size_t count = bytesRead / sizeof(int32_t);
         for (size_t i = 0; i < count && filled < N_FFT; i++) {
-          int32_t rawShifted = (chunkRaw[i] >> 16) * VOLUME_GAIN;
-          if (rawShifted > 32767) rawShifted = 32767;
-          if (rawShifted < -32768) rawShifted = -32768;
-          float norm = (float)rawShifted / 32768.0f;
-          frameBuf[filled++] = norm;
-          sum += norm;
+          float rawSample = (float)(chunkRaw[i] >> 16);
+          frameBuf[filled++] = rawSample;
+          sum += rawSample;
         }
       } else {
         break;
@@ -279,7 +276,10 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
 
     float mean = sum / (float)N_FFT;
     for (int i = 0; i < N_FFT; i++) {
-      float ac = frameBuf[i] - mean;
+      // Remove DC bias BEFORE applying VOLUME_GAIN so high gain never clips on DC offset
+      float ac = ((frameBuf[i] - mean) * (float)VOLUME_GAIN) / 32768.0f;
+      if (ac > 1.0f) ac = 1.0f;
+      if (ac < -1.0f) ac = -1.0f;
       float absAc = fabsf(ac);
       if (absAc > globalMaxAc) globalMaxAc = absAc;
       int32_t acInt = (int32_t)(absAc * 32768.0f);
