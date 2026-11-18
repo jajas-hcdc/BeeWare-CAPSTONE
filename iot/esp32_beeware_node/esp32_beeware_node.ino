@@ -6,12 +6,11 @@
 #include <DHT.h>
 #include <time.h>
 #include <esp_task_wdt.h>
-#include <math.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
 // ======================== FIRMWARE VERSION ========================
-#define FIRMWARE_VERSION    "2.0.6"
+#define FIRMWARE_VERSION    "2.0.4"
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Honea Bee Farm Guest";
@@ -25,7 +24,7 @@ const char* FIREBASE_HOST = "beeware-beaef-default-rtdb.asia-southeast1.firebase
 #define WDT_TIMEOUT_SECONDS 60        // 60 seconds hardware watchdog timeout
 #define RECORD_TIME_SECONDS 3.0       // 3.0 seconds audio
 #define SAMPLE_RATE         16000     // 16kHz studio sample rate
-#define VOLUME_GAIN         10        // Digital gain boost (10x for louder playback)
+#define VOLUME_GAIN         7         // Digital gain boost (7x for maximum safe audibility)
 
 // INMP441 I2S Pins
 #define I2S_WS              25        // Word Select (WS / LRCL)
@@ -182,59 +181,17 @@ void readDHTSensor(float &temp, float &hum) {
 }
 
 // ======================== MEASURE ACOUSTIC FREQUENCY ========================
-static float interpolatePeakBin(const float* avgPower, int bestBin, int minBin, int maxBin) {
-  if (bestBin > minBin && bestBin < maxBin) {
-    float pLeft = avgPower[bestBin - 1];
-    float pCenter = avgPower[bestBin];
-    float pRight = avgPower[bestBin + 1];
-    if (pLeft > 0.0f && pCenter > 0.0f && pRight > 0.0f && pCenter >= pLeft && pCenter >= pRight) {
-      float alpha = logf(pLeft);
-      float beta = logf(pCenter);
-      float gamma = logf(pRight);
-      float denom = alpha - 2.0f * beta + gamma;
-      if (fabsf(denom) > 1e-12f) {
-        float delta = (0.5f * (alpha - gamma)) / denom;
-        if (delta < -0.5f) delta = -0.5f;
-        if (delta > 0.5f) delta = 0.5f;
-        return (float)bestBin + delta;
-      }
-    }
-  }
-  return (float)bestBin;
-}
-
 void measureAcoustics(int32_t &peakVal, int &freqHz) {
   peakVal = 0;
   freqHz = 0;
   if (rx_handle == NULL) return;
 
   const size_t CHUNK_SAMPLES = 192;
-  const int N_FFT = 2048;
-  const int NUM_FRAMES = 8; // 8 * 2048 = 16,384 samples (~1.02s at 16 kHz)
-  const int MIN_BIN = 1;    // ~7.8 Hz
-  const int MAX_BIN = 63;   // ~492.2 Hz (covers full 8-490 Hz bee spectrum)
-
-  static int32_t chunkRaw[CHUNK_SAMPLES];
-  static float frameBuf[N_FFT];
-  static float hannWin[N_FFT];
-  static float goertzelCoeff[MAX_BIN + 1];
-  static bool dspInitialized = false;
-
-  if (!dspInitialized) {
-    const float twoPi = 6.28318530718f;
-    for (int i = 0; i < N_FFT; i++) {
-      hannWin[i] = 0.5f * (1.0f - cosf((twoPi * (float)i) / (float)(N_FFT - 1)));
-    }
-    for (int k = MIN_BIN; k <= MAX_BIN; k++) {
-      goertzelCoeff[k] = 2.0f * cosf((twoPi * (float)k) / (float)N_FFT);
-    }
-    dspInitialized = true;
-  }
+  int32_t chunkRaw[CHUNK_SAMPLES];
 
   // Discard first 3,200 samples (0.2s) of INMP441 startup/settling transient
   size_t discardLeft = 3200;
   while (discardLeft > 0) {
-    feedWatchdog();
     size_t toDiscard = min(CHUNK_SAMPLES, discardLeft);
     size_t bytesRead = 0;
     i2s_channel_read(rx_handle, chunkRaw, toDiscard * sizeof(int32_t), &bytesRead, 50);
@@ -242,160 +199,61 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
     discardLeft -= (bytesRead / sizeof(int32_t));
   }
 
-  float avgPower[MAX_BIN + 1];
-  for (int k = 0; k <= MAX_BIN; k++) avgPower[k] = 0.0f;
-
-  float globalMaxAc = 0.0f;
-  int framesProcessed = 0;
+  size_t totalSamplesToMeasure = (size_t)(SAMPLE_RATE * 1.5);
+  size_t samplesReadTotal = 0;
   uint32_t startMs = millis();
 
-  for (int f = 0; f < NUM_FRAMES && (millis() - startMs < 4000); f++) {
+  const int32_t NOISE_THRESHOLD = 50;
+  int zeroCrossings = 0;
+  int prevSign = 0;
+  int32_t dcEstimate = 0;
+  int32_t lowPassSample = 0;
+  bool dcInitialized = false;
+
+  while (samplesReadTotal < totalSamplesToMeasure && (millis() - startMs < 3000)) {
     feedWatchdog();
-    int filled = 0;
-    float sum = 0.0f;
+    size_t toRead = min(CHUNK_SAMPLES, totalSamplesToMeasure - samplesReadTotal);
+    size_t bytesRead = 0;
+    esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, toRead * sizeof(int32_t), &bytesRead, 100);
+    if (err == ESP_OK && bytesRead > 0) {
+      size_t count = bytesRead / sizeof(int32_t);
+      for (size_t i = 0; i < count; i++) {
+        int32_t rawShifted = (chunkRaw[i] >> 16) * VOLUME_GAIN;
+        if (rawShifted > 32767) rawShifted = 32767;
+        if (rawShifted < -32768) rawShifted = -32768;
 
-    while (filled < N_FFT && (millis() - startMs < 4000)) {
-      size_t toRead = min(CHUNK_SAMPLES, (size_t)(N_FFT - filled));
-      size_t bytesRead = 0;
-      esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, toRead * sizeof(int32_t), &bytesRead, 100);
-      if (err == ESP_OK && bytesRead > 0) {
-        size_t count = bytesRead / sizeof(int32_t);
-        for (size_t i = 0; i < count && filled < N_FFT; i++) {
-          int32_t rawShifted = (chunkRaw[i] >> 16) * VOLUME_GAIN;
-          if (rawShifted > 32767) rawShifted = 32767;
-          if (rawShifted < -32768) rawShifted = -32768;
-          float norm = (float)rawShifted / 32768.0f;
-          frameBuf[filled++] = norm;
-          sum += norm;
+        if (!dcInitialized) {
+          dcEstimate = rawShifted;
+          lowPassSample = 0;
+          dcInitialized = true;
+        } else {
+          dcEstimate = (dcEstimate * 63 + rawShifted) / 64;
         }
-      } else {
-        break;
+        int32_t sample = (rawShifted - dcEstimate);
+        // Single-stage low-pass filter (~630 Hz cutoff) to suppress high-frequency cricket noise
+        // while preserving the true 110-260 Hz honeybee colony fundamental buzzing
+        lowPassSample = (lowPassSample * 3 + sample) / 4;
+
+        int32_t absSample = abs(lowPassSample);
+        if (absSample > peakVal) peakVal = absSample;
+
+        int sign = lowPassSample > NOISE_THRESHOLD ? 1 : (lowPassSample < -NOISE_THRESHOLD ? -1 : 0);
+        if (sign != 0 && prevSign != 0 && sign != prevSign) zeroCrossings++;
+        if (sign != 0) prevSign = sign;
       }
+      samplesReadTotal += count;
     }
-
-    if (filled < N_FFT) break;
-
-    float mean = sum / (float)N_FFT;
-    for (int i = 0; i < N_FFT; i++) {
-      float ac = frameBuf[i] - mean;
-      float absAc = fabsf(ac);
-      if (absAc > globalMaxAc) globalMaxAc = absAc;
-      int32_t acInt = (int32_t)(absAc * 32768.0f);
-      if (acInt > peakVal) peakVal = acInt;
-      frameBuf[i] = ac * hannWin[i];
-    }
-
-    // Exact 2048-point Goertzel DFT across bins 1..63 (7.8 Hz - 492 Hz)
-    for (int k = MIN_BIN; k <= MAX_BIN; k++) {
-      float coeff = goertzelCoeff[k];
-      float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
-      for (int i = 0; i < N_FFT; i++) {
-        s0 = frameBuf[i] + coeff * s1 - s2;
-        s2 = s1;
-        s1 = s0;
-      }
-      float power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
-      if (power > 0.0f) avgPower[k] += power;
-    }
-    framesProcessed++;
   }
 
-  if (framesProcessed == 0 || globalMaxAc < 0.0015f || peakVal < 45) {
+  if (peakVal < 45 || zeroCrossings < 2 || samplesReadTotal == 0) {
     freqHz = 0;
     Serial.println("⚠️ [INMP441] Acoustic silence / not detected (0 Hz)");
-    return;
+  } else {
+    float durationSec = (float)samplesReadTotal / (float)SAMPLE_RATE;
+    float calculatedHz = (zeroCrossings / 2.0f) / durationSec;
+    freqHz = (calculatedHz >= 1.0f && calculatedHz <= 3500.0f) ? (int)round(calculatedHz) : 0;
+    Serial.printf("🔊 Frequency: %d Hz (Peak: %d)\n", freqHz, peakVal);
   }
-
-  // 1. Find raw dominant FFT bin (8 - 490 Hz)
-  int bestBin = MIN_BIN;
-  float bestPower = -1.0f;
-  for (int k = MIN_BIN; k <= MAX_BIN; k++) {
-    if (avgPower[k] > bestPower) {
-      bestPower = avgPower[k];
-      bestBin = k;
-    }
-  }
-
-  const int beeMinBin = (int)ceilf(80.0f * (float)N_FFT / (float)SAMPLE_RATE);  // bin 11 (~86 Hz)
-  const int beeMaxBin = (int)ceilf(260.0f * (float)N_FFT / (float)SAMPLE_RATE); // bin 34 (~266 Hz)
-  int rawHz = (int)roundf(((float)bestBin * (float)SAMPLE_RATE) / (float)N_FFT);
-
-  // Sub-80 Hz rumble recovery (matching mobile app & website)
-  if (rawHz < 80 && beeMinBin <= MAX_BIN) {
-    int bestBeeBin = beeMinBin;
-    float bestBeePower = -1.0f;
-    float bestWeighted = -1.0f;
-    for (int k = beeMinBin; k <= MAX_BIN; k++) {
-      float ws = avgPower[k] * (float)k;
-      if (ws > bestWeighted) {
-        bestWeighted = ws;
-        bestBeePower = avgPower[k];
-        bestBeeBin = k;
-      }
-    }
-    if ((bestBeePower / (float)framesProcessed) >= 0.5f && bestBeePower >= bestPower * 0.0001f) {
-      bestBin = bestBeeBin;
-      bestPower = bestBeePower;
-      rawHz = (int)roundf(((float)bestBin * (float)SAMPLE_RATE) / (float)N_FFT);
-    }
-  }
-
-  // Rain splatter guard when base hum strongly dominates
-  if (rawHz >= 300 && beeMinBin <= beeMaxBin) {
-    int bestPresentBin = beeMinBin;
-    float bestPresentPower = -1.0f;
-    for (int k = beeMinBin; k <= beeMaxBin; k++) {
-      if (avgPower[k] > bestPresentPower) {
-        bestPresentPower = avgPower[k];
-        bestPresentBin = k;
-      }
-    }
-    if (bestPresentPower >= bestPower * 0.45f) {
-      bestBin = bestPresentBin;
-    }
-  }
-
-  int baseDominantHz = (int)roundf((interpolatePeakBin(avgPower, bestBin, MIN_BIN, MAX_BIN) * (float)SAMPLE_RATE) / (float)N_FFT);
-  if (baseDominantHz < 1) baseDominantHz = 1;
-  if (baseDominantHz > 490) baseDominantHz = 490;
-
-  // 2. Real 300-490 Hz Queenless Roar Band analysis (matching mobile app & website)
-  auto bandEnergy = [&](float f1, float f2) -> float {
-    int b1 = max(MIN_BIN, (int)roundf(f1 * (float)N_FFT / (float)SAMPLE_RATE));
-    int b2 = min(MAX_BIN, (int)roundf(f2 * (float)N_FFT / (float)SAMPLE_RATE));
-    float total = 0.0f;
-    for (int k = b1; k <= b2; k++) total += avgPower[k];
-    return total;
-  };
-
-  float eCalm = bandEnergy(80.0f, 180.0f);
-  float eMid = bandEnergy(180.0f, 300.0f);
-  float eRoar300 = bandEnergy(300.0f, 490.0f);
-  float eTotal = eCalm + eMid + eRoar300;
-  float roar300Pct = eTotal > 0.0f ? (eRoar300 / eTotal * 100.0f) : 0.0f;
-  float upperPct = eTotal > 0.0f ? ((eMid + eRoar300) / eTotal * 100.0f) : 0.0f;
-
-  int roarMinBin = max(MIN_BIN, (int)ceilf(300.0f * (float)N_FFT / (float)SAMPLE_RATE)); // bin 39 (~305 Hz)
-  int roarBestBin = roarMinBin;
-  float roarBestPower = -1.0f;
-  for (int k = roarMinBin; k <= MAX_BIN; k++) {
-    if (avgPower[k] > roarBestPower) {
-      roarBestPower = avgPower[k];
-      roarBestBin = k;
-    }
-  }
-  int roarPeakHz = (int)roundf((interpolatePeakBin(avgPower, roarBestBin, MIN_BIN, MAX_BIN) * (float)SAMPLE_RATE) / (float)N_FFT);
-  if (roarPeakHz < 300) roarPeakHz = 300;
-  if (roarPeakHz > 490) roarPeakHz = 490;
-
-  float meanRoarFramePower = roarBestPower / (float)framesProcessed;
-  bool isQueenlessRoar =
-      (meanRoarFramePower >= 0.5f) &&
-      (roar300Pct >= 8.0f || (upperPct >= 20.0f && roar300Pct >= 5.0f) || (baseDominantHz >= 300 && baseDominantHz < 500));
-
-  freqHz = isQueenlessRoar ? roarPeakHz : baseDominantHz;
-  Serial.printf("🔊 FFT Frequency: %d Hz (Base: %d Hz | 300+ Roar: %d Hz [%.1f%%] | Upper: %.1f%% | Peak: %d)\n",
-                freqHz, baseDominantHz, roarPeakHz, roar300Pct, upperPct, peakVal);
 }
 
 // ======================== SEND TELEMETRY TO FIREBASE ========================
