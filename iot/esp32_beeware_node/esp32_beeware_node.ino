@@ -11,7 +11,7 @@
 #include "soc/rtc_cntl_reg.h"
 
 // ======================== FIRMWARE VERSION ========================
-#define FIRMWARE_VERSION    "2.0.7"
+#define FIRMWARE_VERSION    "2.0.8"
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Honea Bee Farm Guest";
@@ -499,17 +499,113 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
   String jsonFoot = "\"}";
   size_t contentLength = jsonHead.length() + totalB64Chars + jsonFoot.length();
 
-  // Buffer 1,536 samples (3,072 bytes PCM -> 4,096 Base64 chars) per TLS write for 8x faster upload
+  // Buffer 1,536 samples (3,072 bytes PCM -> 4,096 Base64 chars) per chunk.
+  // Record all 3.0s into 32 small RAM chunks FIRST (while Wi-Fi/TLS is idle) so TLS writes
+  // never block I2S reads or cause DMA buffer overflows ("tut tut tut" stutter).
   static const size_t READ_SAMPLES = 192;
-  static const size_t BATCH_SAMPLES = 1536; // Must be a multiple of 3 bytes (3072 bytes = 1024 Base64 triples)
+  static const size_t BATCH_SAMPLES = 1536; // Multiple of 3 bytes (3072 bytes = 1024 Base64 triples)
+  static const size_t MAX_CHUNKS = 32;      // 31 * 1536 + 384 = 48,000 samples (96,000 bytes)
   static int32_t chunkRaw[READ_SAMPLES];
   static int16_t batchPcm[BATCH_SAMPLES];
   static char b64Batch[(BATCH_SAMPLES * sizeof(int16_t) * 4) / 3 + 4];
 
+  size_t numChunks = (totalSamples + BATCH_SAMPLES - 1) / BATCH_SAMPLES;
+  int16_t* recChunks[MAX_CHUNKS];
+  size_t chunkSampleCounts[MAX_CHUNKS];
+  for (size_t c = 0; c < MAX_CHUNKS; c++) {
+    recChunks[c] = NULL;
+    chunkSampleCounts[c] = 0;
+  }
+
+  bool useRamBuffer = (numChunks <= MAX_CHUNKS);
+  if (useRamBuffer) {
+    size_t remaining = totalSamples;
+    for (size_t c = 0; c < numChunks; c++) {
+      size_t count = min(BATCH_SAMPLES, remaining);
+      chunkSampleCounts[c] = count;
+      recChunks[c] = (int16_t*)malloc(count * sizeof(int16_t));
+      if (recChunks[c] == NULL) {
+        useRamBuffer = false;
+        break;
+      }
+      remaining -= count;
+    }
+  }
+
+  if (!useRamBuffer) {
+    for (size_t c = 0; c < MAX_CHUNKS; c++) {
+      if (recChunks[c] != NULL) {
+        free(recChunks[c]);
+        recChunks[c] = NULL;
+      }
+    }
+  }
+
+  // Step 1: Capture continuous 3.0s audio cleanly to RAM with zero TLS/Wi-Fi blocking
+  if (useRamBuffer) {
+    Serial.printf("🎙️ [Audio Record] Recording 3.0s continuous audio to RAM (%u KB, Free Heap: %u B)...\n",
+                  (unsigned)((totalSamples * sizeof(int16_t)) / 1024), ESP.getFreeHeap());
+
+    // Keep I2S warm (no disable/enable reset) and flush only 1,536 stale DMA samples (~96ms)
+    int32_t dcEstimate = 0;
+    bool dcInitialized = false;
+    if (rx_handle != NULL) {
+      size_t flushLeft = 1536;
+      while (flushLeft > 0) {
+        feedWatchdog();
+        size_t toFlush = min(READ_SAMPLES, flushLeft);
+        size_t bytesRead = 0;
+        esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, toFlush * sizeof(int32_t), &bytesRead, 50);
+        if (err != ESP_OK || bytesRead == 0) break;
+        size_t cnt = bytesRead / sizeof(int32_t);
+        for (size_t i = 0; i < cnt; i++) {
+          int32_t r = (chunkRaw[i] >> 16);
+          dcEstimate = dcInitialized ? ((dcEstimate * 63 + r) / 64) : r;
+          dcInitialized = true;
+        }
+        flushLeft = (cnt < flushLeft) ? (flushLeft - cnt) : 0;
+      }
+    }
+
+    uint32_t recStartMs = millis();
+    uint32_t recTimeoutMs = (uint32_t)(RECORD_TIME_SECONDS * 1000) + 2500;
+    for (size_t c = 0; c < numChunks; c++) {
+      size_t targetCount = chunkSampleCounts[c];
+      size_t filled = 0;
+      while (filled < targetCount && rx_handle != NULL && (millis() - recStartMs < recTimeoutMs)) {
+        feedWatchdog();
+        size_t toRead = min(READ_SAMPLES, targetCount - filled);
+        size_t bytesRead = 0;
+        esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, toRead * sizeof(int32_t), &bytesRead, 100);
+        if (err == ESP_OK && bytesRead > 0) {
+          size_t readSamples = bytesRead / sizeof(int32_t);
+          for (size_t i = 0; i < readSamples && filled < targetCount; i++) {
+            int32_t rawSample = (chunkRaw[i] >> 16);
+            dcEstimate = dcInitialized ? ((dcEstimate * 63 + rawSample) / 64) : rawSample;
+            dcInitialized = true;
+            // Remove INMP441 DC bias (~40 Hz high-pass) BEFORE applying VOLUME_GAIN
+            int32_t sample = (rawSample - dcEstimate) * VOLUME_GAIN;
+            if (sample > 32767) sample = 32767;
+            if (sample < -32768) sample = -32768;
+            recChunks[c][filled++] = (int16_t)sample;
+          }
+        }
+      }
+      if (filled < targetCount) {
+        memset(&recChunks[c][filled], 0, (targetCount - filled) * sizeof(int16_t));
+      }
+    }
+
+    // Stop I2S immediately after capture to free DMA RAM before opening TLS socket
+    stopI2S();
+  }
+
+  // Step 2: Upload the captured audio cleanly over HTTPS/TLS
+  bool finalResult = false;
   for (int attempt = 1; attempt <= 2; attempt++) {
     feedWatchdog();
-    Serial.printf("☁️ [Audio Upload] [%s] Time: %s | Uploading 3.0s recording to slot %d (Attempt %d/2)...\n",
-                  triggerType, timeStr.c_str(), slot, attempt);
+    Serial.printf("☁️ [Audio Upload] [%s] Time: %s | Uploading 3.0s recording to slot %d (Attempt %d/2, Free Heap: %u B)...\n",
+                  triggerType, timeStr.c_str(), slot, attempt, ESP.getFreeHeap());
 
     WiFiClientSecure client;
     client.setInsecure();
@@ -528,65 +624,64 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
     client.print("Connection: close\r\n\r\n");
     client.print(jsonHead);
 
-    if (rx_handle != NULL) {
-      i2s_channel_disable(rx_handle);
-      delay(10);
-      i2s_channel_enable(rx_handle);
+    if (useRamBuffer) {
+      for (size_t c = 0; c < numChunks; c++) {
+        feedWatchdog();
+        size_t pcmBytes = chunkSampleCounts[c] * sizeof(int16_t);
+        encodeChunkToBase64((const uint8_t*)recChunks[c], pcmBytes, b64Batch);
+        size_t b64Len = (pcmBytes * 4) / 3;
+        client.write((const uint8_t*)b64Batch, b64Len);
+      }
+    } else {
+      // Fallback streaming path if heap was ever too fragmented for 96 KB RAM buffer
+      size_t samplesRecorded = 0;
+      size_t batchCount = 0;
+      int32_t dcEstimate = 0;
+      bool dcInitialized = false;
+      uint32_t startMs = millis();
+      uint32_t timeoutMs = (uint32_t)(RECORD_TIME_SECONDS * 1000) + 4500;
 
-      // Discard first 3,200 samples (0.2s) of INMP441 startup/settling transient
-      size_t discardLeft = 3200;
-      while (discardLeft > 0) {
-        size_t toDiscard = min(READ_SAMPLES, discardLeft);
+      while (samplesRecorded < totalSamples && rx_handle != NULL && (millis() - startMs < timeoutMs)) {
+        feedWatchdog();
+        size_t remainingTotal = totalSamples - samplesRecorded;
+        size_t remainingInBatch = BATCH_SAMPLES - batchCount;
+        size_t samplesToRead = min(READ_SAMPLES, min(remainingTotal, remainingInBatch));
         size_t bytesRead = 0;
-        i2s_channel_read(rx_handle, chunkRaw, toDiscard * sizeof(int32_t), &bytesRead, 50);
-        if (bytesRead == 0) break;
-        discardLeft -= (bytesRead / sizeof(int32_t));
-      }
-    }
+        esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, samplesToRead * sizeof(int32_t), &bytesRead, 100);
+        if (err == ESP_OK && bytesRead > 0) {
+          size_t readSamples = bytesRead / sizeof(int32_t);
+          for (size_t i = 0; i < readSamples; i++) {
+            int32_t rawSample = (chunkRaw[i] >> 16);
+            dcEstimate = dcInitialized ? ((dcEstimate * 63 + rawSample) / 64) : rawSample;
+            dcInitialized = true;
+            int32_t sample = (rawSample - dcEstimate) * VOLUME_GAIN;
+            if (sample > 32767) sample = 32767;
+            if (sample < -32768) sample = -32768;
+            batchPcm[batchCount++] = (int16_t)sample;
+          }
+          samplesRecorded += readSamples;
 
-    size_t samplesRecorded = 0;
-    size_t batchCount = 0;
-    uint32_t startMs = millis();
-    uint32_t timeoutMs = (uint32_t)(RECORD_TIME_SECONDS * 1000) + 4500;
-
-    while (samplesRecorded < totalSamples && (millis() - startMs < timeoutMs)) {
-      feedWatchdog();
-      size_t remainingTotal = totalSamples - samplesRecorded;
-      size_t remainingInBatch = BATCH_SAMPLES - batchCount;
-      size_t samplesToRead = min(READ_SAMPLES, min(remainingTotal, remainingInBatch));
-      size_t bytesRead = 0;
-      esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, samplesToRead * sizeof(int32_t), &bytesRead, 100);
-      if (err == ESP_OK && bytesRead > 0) {
-        size_t readSamples = bytesRead / sizeof(int32_t);
-        for (size_t i = 0; i < readSamples; i++) {
-          int32_t sample = (chunkRaw[i] >> 16) * VOLUME_GAIN;
-          if (sample > 32767) sample = 32767;
-          if (sample < -32768) sample = -32768;
-          batchPcm[batchCount++] = (int16_t)sample;
-        }
-        samplesRecorded += readSamples;
-
-        if (batchCount == BATCH_SAMPLES || samplesRecorded == totalSamples) {
-          encodeChunkToBase64((const uint8_t*)batchPcm, batchCount * sizeof(int16_t), b64Batch);
-          size_t b64Len = (batchCount * sizeof(int16_t) * 4) / 3;
-          client.write((const uint8_t*)b64Batch, b64Len);
-          batchCount = 0;
+          if (batchCount == BATCH_SAMPLES || samplesRecorded == totalSamples) {
+            encodeChunkToBase64((const uint8_t*)batchPcm, batchCount * sizeof(int16_t), b64Batch);
+            size_t b64Len = (batchCount * sizeof(int16_t) * 4) / 3;
+            client.write((const uint8_t*)b64Batch, b64Len);
+            batchCount = 0;
+          }
         }
       }
-    }
 
-    // Pad any remaining samples with silence if I2S read timed out early
-    while (samplesRecorded < totalSamples) {
-      feedWatchdog();
-      size_t remaining = min(BATCH_SAMPLES - batchCount, totalSamples - samplesRecorded);
-      memset(&batchPcm[batchCount], 0, remaining * sizeof(int16_t));
-      batchCount += remaining;
-      samplesRecorded += remaining;
+      while (samplesRecorded < totalSamples) {
+        feedWatchdog();
+        size_t remaining = min(BATCH_SAMPLES - batchCount, totalSamples - samplesRecorded);
+        memset(&batchPcm[batchCount], 0, remaining * sizeof(int16_t));
+        batchCount += remaining;
+        samplesRecorded += remaining;
 
-      encodeChunkToBase64((const uint8_t*)batchPcm, batchCount * sizeof(int16_t), b64Batch);
-      size_t b64Len = (batchCount * sizeof(int16_t) * 4) / 3;
-      client.write((const uint8_t*)b64Batch, b64Len);
-      batchCount = 0;
+        encodeChunkToBase64((const uint8_t*)batchPcm, batchCount * sizeof(int16_t), b64Batch);
+        size_t b64Len = (batchCount * sizeof(int16_t) * 4) / 3;
+        client.write((const uint8_t*)b64Batch, b64Len);
+        batchCount = 0;
+      }
     }
 
     client.print(jsonFoot);
@@ -610,13 +705,21 @@ bool uploadAudioRecordingToFirebase(float temp, float hum, int freqHz, const cha
 
     if (uploadOk) {
       audioSlotCounter = (audioSlotCounter + 1) % 5;
-      return true;
+      finalResult = true;
+      break;
     }
     Serial.println("⚠️ [Audio Upload] Upload did not receive HTTP 200. Retrying...");
     delay(500);
   }
 
-  return false;
+  for (size_t c = 0; c < MAX_CHUNKS; c++) {
+    if (recChunks[c] != NULL) {
+      free(recChunks[c]);
+      recChunks[c] = NULL;
+    }
+  }
+
+  return finalResult;
 }
 
 // ======================== CLOUD OTA FIRMWARE UPDATER ========================
