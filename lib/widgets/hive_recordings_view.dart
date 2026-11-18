@@ -248,13 +248,18 @@ class _HiveRecordingsViewState extends State<HiveRecordingsView> {
 
                     Color badgeColor = AppColors.healthyGreen;
                     Color badgeBg = AppColors.queenPresentGreenBg;
-                    if (clip.frequency == 0 || clip.condition.toLowerCase().contains('no buzz')) {
+                    final condLower = clip.condition.toLowerCase();
+                    if (clip.frequency == 0 ||
+                        clip.frequency < 80 ||
+                        condLower.contains('no buzz') ||
+                        condLower.contains('absent') ||
+                        (clip.frequency >= 300 && clip.frequency < 500 && !condLower.contains('rejected'))) {
                       badgeColor = AppColors.queenAbsentRed;
                       badgeBg = AppColors.queenAbsentRedBg;
-                    } else if (clip.frequency >= 300 || clip.condition.toLowerCase().contains('rejected')) {
+                    } else if (condLower.contains('rejected')) {
                       badgeColor = AppColors.queenRejectedOrange;
                       badgeBg = AppColors.queenRejectedOrangeBg;
-                    } else if (clip.condition.toLowerCase().contains('accepted')) {
+                    } else if (condLower.contains('accepted')) {
                       badgeColor = AppColors.queenAcceptedBlue;
                       badgeBg = AppColors.queenAcceptedBlueBg;
                     }

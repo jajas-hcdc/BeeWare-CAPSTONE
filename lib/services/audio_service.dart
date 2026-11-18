@@ -305,14 +305,32 @@ class AudioService extends ChangeNotifier {
       }
     }
 
-    // Sort descending: newest recording first
-    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    // Deduplicate by createdAt, preferring preserved event_* (300+ Hz) clips over ring-buffer slots
+    final Map<String, AudioRecordingModel> dedupMap = {};
+    for (final item in list) {
+      final key = item.createdAt > 0 ? item.createdAt.toString() : item.id;
+      final existing = dedupMap[key];
+      final itemPinned = item.id.startsWith('event_');
+      final existingPinned = existing != null && existing.id.startsWith('event_');
+      if (existing == null || (itemPinned && !existingPinned)) {
+        dedupMap[key] = item;
+      }
+    }
 
-    final trimmed = list.take(5).toList();
+    // Keep the 5 newest live ring-buffer slots PLUS all preserved 300+ Hz event_* clips
+    final deduped = dedupMap.values.toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final liveSlots = deduped.where((c) => !c.id.startsWith('event_')).take(5).toList();
+    final pinnedEvents = deduped.where((c) => c.id.startsWith('event_')).toList();
+    final trimmed = <AudioRecordingModel>[...liveSlots, ...pinnedEvents]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    // Run on-device TFLite model (assets/beeware_model.tflite) & FFT frequency extraction across all 5 ESP32 audio clips
+    // Run on-device TFLite model (assets/beeware_model.tflite) & FFT frequency extraction across ESP32 audio clips
     for (int i = 0; i < trimmed.length; i++) {
       final clip = trimmed[i];
+      if (clip.id.startsWith('event_')) {
+        // Keep preserved 300+ Hz queenless event recordings untouched
+        continue;
+      }
       final cacheKey = '$cleanId:${clip.id}:${clip.createdAt}';
       final prevInferred = _inferredClipsByDevice[cacheKey];
 

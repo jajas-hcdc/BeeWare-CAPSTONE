@@ -343,14 +343,17 @@ export default function AudioVaultView() {
     const unsub = onValue(audioRefDb, (snapshot) => {
       if (snapshot.exists()) {
         const val = snapshot.val();
-        const slots = [];
+        const rawSlots = [];
         Object.keys(val).forEach((k) => {
           const item = val[k];
           if (item && typeof item === 'object') {
             const rawAudioB64 = item.audioBase64 || item.audio_base64 || item.audio || item.audioUrl || '';
             const rawStoredFreq = item.frequency || item.frequency_hz || 94;
-            const resolvedFreq = computeDominantPitchHz(rawAudioB64, rawStoredFreq);
-            slots.push({
+            const isPinnedEvent = Boolean(item.pinned || item.preserved || k.startsWith('event_'));
+            const resolvedFreq = isPinnedEvent
+              ? rawStoredFreq
+              : computeDominantPitchHz(rawAudioB64, rawStoredFreq);
+            rawSlots.push({
               key: k,
               slot: item.slot !== undefined ? item.slot : k,
               date: item.recorded_date || 'Oct 29, 2026',
@@ -359,11 +362,21 @@ export default function AudioVaultView() {
               condition: item.condition || 'Queen Present',
               trigger: item.trigger || 'Cooldown Cycle',
               audioBase64: rawAudioB64,
-              createdAt: item.createdAt || item.created_at || 0
+              createdAt: item.createdAt || item.created_at || 0,
+              isPinned: isPinnedEvent
             });
           }
         });
-        slots.sort((a, b) => b.createdAt - a.createdAt);
+        // Deduplicate by createdAt timestamp, preferring preserved/pinned 300+ Hz event records over ring-buffer slots
+        const byEpoch = new Map();
+        rawSlots.forEach((entry) => {
+          const dedupKey = entry.createdAt > 0 ? String(entry.createdAt) : entry.key;
+          const existing = byEpoch.get(dedupKey);
+          if (!existing || (entry.isPinned && !existing.isPinned)) {
+            byEpoch.set(dedupKey, entry);
+          }
+        });
+        const slots = Array.from(byEpoch.values()).sort((a, b) => b.createdAt - a.createdAt);
         setAudioSlots(slots);
         if (slots.length > 0) {
           setActiveSlotKey(slots[0].key);
