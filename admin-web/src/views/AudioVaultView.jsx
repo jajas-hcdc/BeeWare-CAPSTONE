@@ -158,40 +158,23 @@ function computeDominantPitchHz(base64Data, fallbackHz = 0, sampleRate = 16000) 
       }
     }
 
+    // If the raw FFT peak landed below 80 Hz solely due to INMP441 sub-bass DC drift (e.g. 8 Hz),
+    // select the true UNWEIGHTED dominant FFT peak inside the 80-490 Hz honeybee band
+    // with zero artificial weighting, tilt, or overrides.
     const beeMinBin = Math.max(minBin, Math.ceil((80.0 * nFft) / sampleRate));
-    const beeMaxBin = Math.min(maxBin, Math.ceil((260.0 * nFft) / sampleRate));
-    let rawHz = Math.round((bestBin * sampleRate) / nFft);
+    const rawHz = Math.round((bestBin * sampleRate) / nFft);
 
     if (rawHz < 80 && beeMinBin <= maxBin) {
       let bestBeeBin = beeMinBin;
       let bestBeePower = -1;
-      let bestWeighted = -1;
       for (let k = beeMinBin; k <= maxBin; k++) {
-        const ws = avgPower[k] * k;
-        if (ws > bestWeighted) {
-          bestWeighted = ws;
+        if (avgPower[k] > bestBeePower) {
           bestBeePower = avgPower[k];
           bestBeeBin = k;
         }
       }
       if (bestBeePower / frameCount >= 0.5 && bestBeePower >= bestPower * 0.0001) {
         bestBin = bestBeeBin;
-        bestPower = bestBeePower;
-        rawHz = Math.round((bestBin * sampleRate) / nFft);
-      }
-    }
-
-    if (rawHz >= 300 && beeMinBin <= beeMaxBin) {
-      let bestPresentBin = beeMinBin;
-      let bestPresentPower = -1;
-      for (let k = beeMinBin; k <= beeMaxBin; k++) {
-        if (avgPower[k] > bestPresentPower) {
-          bestPresentPower = avgPower[k];
-          bestPresentBin = k;
-        }
-      }
-      if (bestPresentPower >= bestPower * 0.45) {
-        bestBin = bestPresentBin;
       }
     }
 

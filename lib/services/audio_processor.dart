@@ -139,22 +139,16 @@ class AudioProcessor {
       }
     }
 
-    // If the best bin landed below 90 Hz due to INMP441 sub-bass DC drift or 60 Hz mains hum,
-    // check whether the 90-490 Hz honeybee acoustic band contains audible buzzing energy.
-    // Use .ceil() so the minimum bin is strictly >= 90 Hz (bin 12 = 94 Hz at 16 kHz, not bin 11 = 86 Hz).
-    final int beePresentMinBin = max(minBin, (80.0 * _nFft / sampleRate).ceil());
-    final int beePresentMaxBin = min(maxBin, (260.0 * _nFft / sampleRate).ceil());
-    int rawHz = ((bestBin * sampleRate) / _nFft).round();
-    if (rawHz < 80 && beePresentMinBin <= maxBin) {
-      int bestBeeBin = beePresentMinBin;
+    // If the raw FFT peak landed below 80 Hz solely due to INMP441 sub-bass DC drift (e.g. 8 Hz),
+    // select the true UNWEIGHTED dominant FFT peak inside the 80-490 Hz honeybee band
+    // with zero artificial weighting, tilt, or overrides.
+    final int beeMinBin = max(minBin, (80.0 * _nFft / sampleRate).ceil());
+    final int rawHz = ((bestBin * sampleRate) / _nFft).round();
+    if (rawHz < 80 && beeMinBin <= maxBin) {
+      int bestBeeBin = beeMinBin;
       double bestBeePower = -1.0;
-      double bestWeightedScore = -1.0;
-      for (int k = beePresentMinBin; k <= maxBin; k++) {
-        // Weight by frequency bin k (+6 dB/octave pre-emphasis) so 1/f sub-bass roll-off at 94 Hz
-        // does not mask the true honeybee fundamental harmonic peak (e.g. 109-250 Hz).
-        final double weightedScore = avgPower[k] * k;
-        if (weightedScore > bestWeightedScore) {
-          bestWeightedScore = weightedScore;
+      for (int k = beeMinBin; k <= maxBin; k++) {
+        if (avgPower[k] > bestBeePower) {
           bestBeePower = avgPower[k];
           bestBeeBin = k;
         }
@@ -162,24 +156,6 @@ class AudioProcessor {
       final double meanFrameBeePower = bestBeePower / frameCount;
       if (meanFrameBeePower >= 0.5 && bestBeePower >= bestPower * 0.0001) {
         bestBin = bestBeeBin;
-        bestPower = bestBeePower;
-        rawHz = ((bestBin * sampleRate) / _nFft).round();
-      }
-    }
-
-    // If the best bin landed in 300-490 Hz due to broadband rain splatter, check whether
-    // the 90-260 Hz Queen Present band has comparable or strong fundamental energy (>= 45% of peak power).
-    if (rawHz >= 300 && beePresentMinBin <= beePresentMaxBin) {
-      int bestPresentBin = beePresentMinBin;
-      double bestPresentPower = -1.0;
-      for (int k = beePresentMinBin; k <= beePresentMaxBin; k++) {
-        if (avgPower[k] > bestPresentPower) {
-          bestPresentPower = avgPower[k];
-          bestPresentBin = k;
-        }
-      }
-      if (bestPresentPower >= bestPower * 0.45) {
-        bestBin = bestPresentBin;
       }
     }
 
