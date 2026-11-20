@@ -11,7 +11,7 @@
 #include "soc/rtc_cntl_reg.h"
 
 // ======================== FIRMWARE VERSION ========================
-#define FIRMWARE_VERSION    "2.0.10"
+#define FIRMWARE_VERSION    "2.0.11"
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Honea Bee Farm Guest";
@@ -212,7 +212,9 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
 
   const size_t CHUNK_SAMPLES = 192;
   const int N_FFT = 2048;
-  const int NUM_FRAMES = 8; // 8 * 2048 = 16,384 samples (~1.02s at 16 kHz)
+  // Full 3.0-second audio recording window: 23 frames * 2048 = 47,104 samples (~2.94s at 16 kHz)
+  // Prioritizes the full 3.0s sample duration so transient 50ms chirps are averaged out
+  const int NUM_FRAMES = 23;
   const int MIN_BIN = 1;    // ~7.8 Hz
   const int MAX_BIN = 63;   // ~492.2 Hz (covers full 8-490 Hz bee spectrum)
 
@@ -251,12 +253,12 @@ void measureAcoustics(int32_t &peakVal, int &freqHz) {
   int framesProcessed = 0;
   uint32_t startMs = millis();
 
-  for (int f = 0; f < NUM_FRAMES && (millis() - startMs < 4000); f++) {
+  for (int f = 0; f < NUM_FRAMES && (millis() - startMs < 7000); f++) {
     feedWatchdog();
     int filled = 0;
     float sum = 0.0f;
 
-    while (filled < N_FFT && (millis() - startMs < 4000)) {
+    while (filled < N_FFT && (millis() - startMs < 7000)) {
       size_t toRead = min(CHUNK_SAMPLES, (size_t)(N_FFT - filled));
       size_t bytesRead = 0;
       esp_err_t err = i2s_channel_read(rx_handle, chunkRaw, toRead * sizeof(int32_t), &bytesRead, 100);
